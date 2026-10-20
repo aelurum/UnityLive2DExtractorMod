@@ -13,12 +13,15 @@ namespace AssetStudio
         public bool m_MipMap;
         public int m_MipCount;
         public GLTextureSettings m_TextureSettings;
+        public int m_LightmapFormat;
         public int m_ImageCount;
         public byte[] m_PlatformBlob;
         [JsonPropertyName("image data")]
         public ResourceReader image_data;
         public StreamingInfo m_StreamData;
         public StreamingInfo m_DataStreamData; //Tuanjie
+        [JsonIgnore]
+        private ulong dataHash; //we need to store hashes because of sprites
 
         public Texture2D() { }
 
@@ -49,28 +52,31 @@ namespace AssetStudio
             var offset = layer * m_CompleteImageSize + m_Texture2DArray.image_data.Offset;
             
             image_data = !string.IsNullOrEmpty(m_StreamData?.path) 
-                ? new ResourceReader(m_StreamData.path, assetsFile, offset, m_CompleteImageSize) 
+                ? new ResourceReader(m_StreamData.path, assetsFile, offset, m_CompleteImageSize, type) 
                 : new ResourceReader(reader, offset, m_CompleteImageSize);
 
             byteSize = (uint)(m_Width * m_Height) * 4;
         }
 
-        public Texture2D(ObjectReader reader, byte[] type, JsonSerializerOptions jsonOptions) : base(reader)
+        public Texture2D(ObjectReader reader, JsonSerializerOptions jsonOptions) : base(reader)
         {
-            var parsedTex2d = JsonSerializer.Deserialize<Texture2D>(type, jsonOptions);
+            var parsedTex2d = JsonSerializer.Deserialize<Texture2D>(TypeTreeHelper.ReadTypeByteArray(reader), jsonOptions);
             m_Width = parsedTex2d.m_Width;
             m_Height = parsedTex2d.m_Height;
             m_CompleteImageSize = parsedTex2d.m_CompleteImageSize;
-            m_TextureFormat = parsedTex2d.m_TextureFormat;
+            m_TextureFormat = version.IsTuanjie && version >= (2022, 3, 62, 8)
+                ? parsedTex2d.m_TextureFormat.ToTuanjie() //2022.3.62t8(1.9.0) and up
+                : parsedTex2d.m_TextureFormat;
             m_MipMap = parsedTex2d.m_MipMap;
             m_MipCount = parsedTex2d.m_MipCount;
             m_ImageCount = parsedTex2d.m_ImageCount;
             m_TextureSettings = parsedTex2d.m_TextureSettings;
+            m_LightmapFormat = parsedTex2d.m_LightmapFormat;
             m_StreamData = parsedTex2d.m_StreamData;
             m_PlatformBlob = parsedTex2d.m_PlatformBlob ?? Array.Empty<byte>();
 
             image_data = !string.IsNullOrEmpty(m_StreamData?.path)
-                ? new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size)
+                ? new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size, type)
                 : new ResourceReader(reader, parsedTex2d.image_data.Offset, parsedTex2d.image_data.Size);
         }
 
@@ -83,7 +89,7 @@ namespace AssetStudio
             {
                 var m_MipsStripped = reader.ReadInt32();
             }
-            if (version.IsTuanjie && (version > (2022, 3, 2) || version.Build >= 8)) //2022.3.2t8(1.1.0) and up
+            if (version.IsTuanjie && version >= (2022, 3, 2, 8)) //2022.3.2t8(1.1.0) and up
             {
                 var m_WebStreaming = reader.ReadBoolean();
                 reader.AlignStream();
@@ -102,6 +108,8 @@ namespace AssetStudio
                 var m_TextureManagerMultiFormatSettingSize = reader.ReadInt32();
                 reader.Position += m_TextureManagerMultiFormatSettingSize; //skip byte[] m_TextureManagerMultiFormatSetting
                 reader.AlignStream();
+
+                m_TextureFormat = version >= (2022, 3, 62, 8) ? m_TextureFormat.ToTuanjie() : m_TextureFormat; //2022.3.62t8(1.9.0) and up
             }
             if (version < (5, 2)) //5.2 down
             {
@@ -131,7 +139,7 @@ namespace AssetStudio
                     var m_IgnoreMasterTextureLimit = reader.ReadBoolean();
                 }
             }
-            if (version.IsInRange(3, (5, 5))) //3.0.0 - 5.4
+            if (version.IsInRange(3, (5, 5))) //3.0.0 - 5.5 down
             {
                 var m_ReadAllowed = reader.ReadBoolean();
             }
@@ -143,7 +151,10 @@ namespace AssetStudio
             {
                 var m_StreamingMipmaps = reader.ReadBoolean();
             }
-            reader.AlignStream();
+            if (version >= (2, 1))
+            {
+                reader.AlignStream();
+            }
             if (version >= (2018, 2)) //2018.2 and up
             {
                 var m_StreamingMipmapsPriority = reader.ReadInt32();
@@ -153,7 +164,7 @@ namespace AssetStudio
             m_TextureSettings = new GLTextureSettings(reader);
             if (version >= 3) //3.0 and up
             {
-                var m_LightmapFormat = reader.ReadInt32();
+                m_LightmapFormat = reader.ReadInt32();
             }
             if (version >= (3, 5)) //3.5.0 and up
             {
@@ -175,18 +186,40 @@ namespace AssetStudio
             }
 
             image_data = !string.IsNullOrEmpty(m_StreamData?.path)
-                ? new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size)
+                ? new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size, type)
                 : new ResourceReader(reader, reader.BaseStream.Position, image_data_size);
         }
 
-        // https://docs.unity3d.com/2023.3/Documentation/Manual/class-TextureImporterOverride.html
+        public ulong GetImageDataHash()
+        {
+            if (dataHash != 0)
+                return dataHash;
+
+            if (image_data.Size == 0)
+                return 0;
+
+            var buff = BigArrayPool<byte>.Shared.Rent(image_data.Size);
+            try
+            {
+                _ = image_data.GetData(buff);
+                dataHash = System.IO.Hashing.XxHash3.HashToUInt64(buff.AsSpan(0, image_data.Size));
+            }
+            finally
+            {
+                BigArrayPool<byte>.Shared.Return(buff);
+            }
+            
+            return dataHash;
+        }
+
+        // https://docs.unity3d.com/6000.0/Documentation/Manual/texture-formats-reference.html
         private int GetImageDataSize(TextureFormat textureFormat)
         {
             var imgDataSize = m_Width * m_Height;
             switch (textureFormat)
             {
+                // https://registry.khronos.org/webgl/extensions/WEBGL_compressed_texture_astc/
                 case TextureFormat.ASTC_RGBA_5x5:
-                    // https://registry.khronos.org/webgl/extensions/WEBGL_compressed_texture_astc/
                     imgDataSize = (int)(MathF.Floor((m_Width + 4) / 5f) * MathF.Floor((m_Height + 4) / 5f) * 16);
                     break;
                 case TextureFormat.ASTC_RGBA_6x6:

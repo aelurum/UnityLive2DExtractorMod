@@ -28,7 +28,7 @@ namespace UnityLive2DExtractor.Utilities
                         helper.AddMonoCubismFadeList(m_Type.m_Nodes, 1);
                         break;
                     case "CubismFadeMotionData":
-                        helper.AddMonoCubismFadeData(m_Type.m_Nodes, 1);
+                        helper.AddMonoCubismFadeData(m_Type.m_Nodes, m_MonoBehaviour.serializedType, 1);
                         break;
                     case "CubismExpressionController":
                         helper.AddMonoCubismExpressionController(m_Type.m_Nodes, 1);
@@ -47,6 +47,9 @@ namespace UnityLive2DExtractor.Utilities
                         break;
                     case "CubismPosePart":
                         helper.AddMonoCubismPosePart(m_Type.m_Nodes, 1);
+                        break;
+                    case "CubismPhysicsController":
+                        helper.AddMonoCubismPhysics(m_Type.m_Nodes, m_MonoBehaviour.serializedType, 1);
                         break;
                 }
             }

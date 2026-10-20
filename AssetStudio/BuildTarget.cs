@@ -61,5 +61,7 @@
         ArmLinux,
         ArmLinuxServer,
         VisionOS,
+        PlayableAds,
+        Switch2,
     }
 }

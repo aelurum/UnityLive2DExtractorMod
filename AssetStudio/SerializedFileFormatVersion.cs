@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace AssetStudio
+﻿namespace AssetStudio
 {
     public enum SerializedFileFormatVersion
     {
@@ -80,8 +74,27 @@ namespace AssetStudio
         /// </summary>
         StoresTypeDependencies = 21,
         /// <summary>
-        /// 2020.1 to x
+        /// 2020.1 to 6000.5
         /// </summary>
-        LargeFilesSupport = 22
+        LargeFilesSupport = 22,
+        /// <summary>
+        /// 6000.5.0a5 to 6000.6
+        /// </summary>
+        ExtractedTypeTreeSupport = 23,
+        /// <summary>
+        /// 6000.7.0a6
+        /// </summary>
+        IndependentTypeTreeVersion = 24,
+        /// <summary>
+        /// 6000.7.0a6
+        /// </summary>
+        SerializeReferenceRegistryFirst = 25,
+        /// <summary>
+        /// 6000.7.0b2 to x
+        /// </summary>
+        SharedSubTreeSupport = 26,
+
+        // used by AssetStudio
+        NotTested
     }
 }

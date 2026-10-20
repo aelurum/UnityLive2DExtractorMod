@@ -1,7 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 
 namespace AssetStudio
 {
@@ -17,5 +15,12 @@ namespace AssetStudio
         public string m_KlassName;
         public string m_NameSpace;
         public string m_AsmName;
+        public List<string> subTreeHashList;
+
+        public bool Match(params ulong[] hashes)
+        {
+            var typeHash = System.IO.Hashing.XxHash3.HashToUInt64(m_OldTypeHash);
+            return hashes.Any(x => x == typeHash);
+        }
     }
 }

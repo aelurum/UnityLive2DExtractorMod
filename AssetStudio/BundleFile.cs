@@ -1,8 +1,6 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
-using System.Collections.Generic;
-using AssetStudio.CustomOptions;
 
 namespace AssetStudio
 {
@@ -42,10 +40,13 @@ namespace AssetStudio
         Oodle, //custom
     }
 
-    public class BundleFile
+    public class BundleFile : FileArchive
     {
         public readonly bool IsDataAfterBundle;
-        private readonly CustomBundleOptions _bundleOptions;
+
+        private static TempFileStream _sharedTempFileStream;
+        private readonly bool _useSharedStream;
+        private readonly AssetsManagerOptions _studioOptions;
 
         public class Header
         {
@@ -78,18 +79,15 @@ namespace AssetStudio
         private StorageBlock[] m_BlocksInfo;
         private Node[] m_DirectoryInfo;
 
-        public List<StreamFile> fileList;
-
-        public BundleFile(FileReader reader, CustomBundleOptions bundleOptions, bool isMultiBundle = false)
+        public BundleFile(FileReader reader, AssetsManagerOptions studioOptions, bool isMultiBundle = false, bool useSharedStream = true)
         {
-            _bundleOptions = bundleOptions;
+            _studioOptions = studioOptions;
+            _useSharedStream = useSharedStream;
             m_Header = new Header();
             m_Header.signature = reader.ReadStringToNull();
             m_Header.version = reader.ReadUInt32();
             m_Header.unityVersion = reader.ReadStringToNull();
-            var revStr = reader.ReadStringToNull();
-            if (!UnityVersion.TryParse(revStr, out m_Header.unityRevision))
-                m_Header.unityRevision = new UnityVersion();
+            m_Header.unityRevision = UnityVersion.TryParse(reader.ReadStringToNull(), out var ver) ? ver : new UnityVersion();
             
             switch (m_Header.signature)
             {
@@ -115,16 +113,16 @@ namespace AssetStudio
                     if (bundleSize > streamSize)
                         Logger.Warning("Bundle size is incorrect.");
                     IsDataAfterBundle = streamSize - bundleSize > 200;
-                    
+
                     var unityVer = m_Header.unityRevision;
-                    var customUnityVer = _bundleOptions.Options.CustomUnityVersion;
+                    var customUnityVer = studioOptions.GameSpecific.CustomUnityVersion;
                     if (customUnityVer != null)
                     {
                         if (!unityVer.IsStripped && customUnityVer != unityVer)
                         {
-                            Logger.Warning($"Detected Unity version is different from the specified one ({customUnityVer.FullVersion.Color(ColorConsole.BrightCyan)}).\n" +
-                                $"Assets may load with errors.\n" +
-                                $"It is recommended to specify the detected Unity version: {unityVer.FullVersion.Color(ColorConsole.BrightCyan)}");
+                            Logger.Warning($"Detected Unity version [{unityVer.FullVersion.Color(ColorConsole.BrightCyan)}] is different from the specified one [{customUnityVer.FullVersion.Color(ColorConsole.BrightCyan)}].\n" +
+                                "Assets may load with errors.\n" +
+                                "It is recommended not to specify a Unity version for this file.");
                         }
                         unityVer = customUnityVer;
                     }
@@ -182,26 +180,36 @@ namespace AssetStudio
             reader.Position = m_Header.size;
         }
 
-        private Stream CreateBlocksStream(string path)
+        private Stream CreateBlocksStream()
         {
             var uncompressedSizeSum = m_BlocksInfo.Sum(x => x.uncompressedSize);
-            if (uncompressedSizeSum < int.MaxValue && !_bundleOptions.DecompressToDisk) 
+            if (!_studioOptions.DecompressToDisk && uncompressedSizeSum < int.MaxValue)
                 return new MemoryStream((int)uncompressedSizeSum);
 
-            if (!Directory.Exists(Path.GetDirectoryName(path)))
+            bool createNewSharedStream = _sharedTempFileStream == null || !_sharedTempFileStream.CanRead;
+            if (_useSharedStream && !createNewSharedStream)
+                return new OffsetStream(_sharedTempFileStream, _sharedTempFileStream.Length, uncompressedSizeSum);
+
+            var cachePath = _studioOptions.CustomCachePath;
+            if (string.IsNullOrEmpty(cachePath) || !Directory.Exists(cachePath))
+                throw new NotSupportedException("Cache directory wasn't found. Make sure that the specified path is correct.");
+            
+            var filename = $"studio_{DateTimeOffset.UtcNow.ToUnixTimeSeconds():X}.temp";
+            if (_useSharedStream)
             {
-                var tempDir = Path.Combine(Directory.GetCurrentDirectory(), "Studio_temp");
-                Directory.CreateDirectory(tempDir);
-                var filename = Path.GetFileName(path);
-                var hash = path.GetHashCode();
-                path = Path.Combine(tempDir, $"{filename}_{hash:X}");
+                _sharedTempFileStream = new TempFileStream(Path.Combine(cachePath, filename), FileMode.Create);
+                return new OffsetStream(_sharedTempFileStream, _sharedTempFileStream.Length, uncompressedSizeSum);
             }
-            return new TempFileStream(path + ".temp", FileMode.Create);
+            else
+            {
+                var tempFileStream = new TempFileStream(Path.Combine(cachePath, filename), FileMode.Create);
+                return new OffsetStream(tempFileStream, tempFileStream.Length, uncompressedSizeSum);
+            }
         }
 
         private Stream ReadBlocksAndDirectory(FileReader reader)
         {
-            var blocksStream = CreateBlocksStream(reader.FullPath);
+            var blocksStream = CreateBlocksStream();
             var isCompressed = m_Header.signature == "UnityWeb";
             foreach (var blockInfo in m_BlocksInfo)
             {
@@ -238,11 +246,10 @@ namespace AssetStudio
 
         private void ReadFiles(Stream inputStream, long blocksOffset = 0)
         {
-            fileList = new List<StreamFile>(m_DirectoryInfo.Length);
             foreach (var node in m_DirectoryInfo)
             {
                 var file = new StreamFile();
-                fileList.Add(file);
+                this.FileList.Add(file);
                 file.path = node.path;
                 file.fileName = Path.GetFileName(node.path);
                 try
@@ -308,7 +315,7 @@ namespace AssetStudio
                 blocksInfoBytes = reader.ReadBytes(compressedSize);
             }
             
-            var customBlockInfoCompression = _bundleOptions.CustomBlockInfoCompression;
+            var customBlockInfoCompression = _studioOptions.GameSpecific.Bundles.CustomBlockInfoCompression;
             var compressionType = (CompressionType)(m_Header.flags & ArchiveFlags.CompressionTypeMask);
             if (customBlockInfoCompression == CompressionType.Auto)
             {
@@ -361,12 +368,13 @@ namespace AssetStudio
                 case CompressionType.Lzham:
                     throw new IOException($"Unsupported blockInfo compression type: {compressionType}.\n");
                 default:
-                    throw new IOException($"Unknown blockInfo compression type: {compressionType}.\nYou may try to specify the compression type manually.\n");
+                    throw new IOException($"Unknown blockInfo compression type: {compressionType}.\nYou may try to specify the compression type manually in the options.\n");
             }
 
             if (numWrite != uncompressedSize)
             {
-                var msg = $"{compressionType} blockInfo decompression error. {errorMsg}\nWrite {numWrite} bytes but expected {uncompressedSize} bytes.";
+                var type = compressionType == CompressionType.None ? "Uncompressed" : compressionType.ToString();
+                var msg = $"{type} blockInfo decompression error. {errorMsg}\nWrite {numWrite} bytes but expected {uncompressedSize} bytes.";
                 var exMsg = compressionType > CompressionType.Lz4HC || customBlockInfoCompression != CompressionType.Auto
                     ? "Wrong compression type or blockInfo data might be encrypted."
                     : "BlockInfo data might be encrypted.";
@@ -386,6 +394,10 @@ namespace AssetStudio
                         compressedSize = blocksInfoReader.ReadUInt32(),
                         flags = (StorageBlockFlags)blocksInfoReader.ReadUInt16()
                     };
+                    if (m_Header.version >= 9)
+                    {
+                        var offset = blocksInfoReader.ReadUInt64();
+                    }
                 }
 
                 var nodesCount = blocksInfoReader.ReadInt32();
@@ -409,8 +421,8 @@ namespace AssetStudio
 
         private Stream ReadBlocks(FileReader reader)
         {
-            var customBlockCompression = _bundleOptions.CustomBlockCompression;
-            var blocksStream = CreateBlocksStream(reader.FullPath);
+            var customBlockCompression = _studioOptions.GameSpecific.Bundles.CustomBlockCompression;
+            var blocksStream = CreateBlocksStream();
             var blocksCompression = m_BlocksInfo.Max(x => (CompressionType)(x.flags & StorageBlockFlags.CompressionTypeMask));
             var blockSize = (int)m_BlocksInfo.Max(x => x.uncompressedSize);
             Logger.Debug($"BlockData compression: {blocksCompression}\n" +
@@ -432,22 +444,25 @@ namespace AssetStudio
 
             byte[] sharedCompressedBuff = null;
             byte[] sharedUncompressedBuff = null;
-            if (blocksCompression != CompressionType.Lzma && blocksCompression != CompressionType.Lzham)
+            if (blocksCompression > CompressionType.Lzma && blocksCompression != CompressionType.Lzham)
             {
-                sharedCompressedBuff = BigArrayPool<byte>.Shared.Rent(blockSize);
+                var maxCompressedSize = (int)m_BlocksInfo.Max(x => x.compressedSize);
+                sharedCompressedBuff = BigArrayPool<byte>.Shared.Rent(maxCompressedSize);
                 sharedUncompressedBuff = BigArrayPool<byte>.Shared.Rent(blockSize);
             }
 
             try
             {
-                foreach (var blockInfo in m_BlocksInfo)
+                for (var i = 0; i < m_BlocksInfo.Length; i++)
                 {
+                    var blockInfo = m_BlocksInfo[i];
                     var compressionType = (CompressionType)(blockInfo.flags & StorageBlockFlags.CompressionTypeMask);
 
                     if (customBlockCompression != CompressionType.Auto && compressionType > 0)
                     {
                         compressionType = customBlockCompression;
                     }
+                    var debugMsg = $"[{i:D2}] Compression: {compressionType} | UncompressedSize: {blockInfo.uncompressedSize} | CompressedSize: {blockInfo.compressedSize} ";
 
                     long numWrite;
                     var errorMsg = string.Empty;
@@ -458,7 +473,6 @@ namespace AssetStudio
                             numWrite = blockInfo.compressedSize;
                             break;
                         case CompressionType.Lzma:
-                            Logger.Info("Decompressing LZMA stream...");
                             numWrite = BundleDecompressionHelper.DecompressLzmaStream(reader.BaseStream, blocksStream, blockInfo.compressedSize, blockInfo.uncompressedSize, ref errorMsg);
                             break;
                         case CompressionType.Lz4:
@@ -471,7 +485,13 @@ namespace AssetStudio
                             sharedCompressedBuff.AsSpan().Clear();
                             sharedUncompressedBuff.AsSpan().Clear();
 
-                            _ = reader.Read(sharedCompressedBuff, 0, compressedSize);
+                            var read = reader.Read(sharedCompressedBuff, 0, compressedSize);
+                            debugMsg += $"(read: {read.ToString().ColorIf(read != compressedSize, ColorConsole.BrightRed)})";
+                            // https://unity.com/releases/editor/beta/6000.7.0b2#notes
+                            if (m_Header.version >= 9)
+                            {
+                                reader.AlignStream(16);
+                            }
                             var compressedSpan = new ReadOnlySpan<byte>(sharedCompressedBuff, 0, compressedSize);
                             var uncompressedSpan = new Span<byte>(sharedUncompressedBuff, 0, uncompressedSize);
 
@@ -479,7 +499,6 @@ namespace AssetStudio
                             if (numWrite == uncompressedSize)
                             {
                                 blocksStream.Write(sharedUncompressedBuff, 0, uncompressedSize);
-                                continue;
                             }
                             break;
                         case CompressionType.Lzham:
@@ -487,10 +506,12 @@ namespace AssetStudio
                         default:
                             throw new IOException($"Unknown block compression type: {compressionType}.\nYou may try to specify the compression type manually.\n");
                     }
+                    Logger.Debug(debugMsg);
 
                     if (numWrite != blockInfo.uncompressedSize)
                     {
-                        var msg = $"{compressionType} block decompression error. {errorMsg}\nWrite {numWrite} bytes but expected {blockInfo.uncompressedSize} bytes.";
+                        var type = compressionType == CompressionType.None ? "Uncompressed" : compressionType.ToString();
+                        var msg = $"{type} block decompression error. {errorMsg}\nWrite {numWrite} bytes but expected {blockInfo.uncompressedSize} bytes.";
                         var exMsg = compressionType > CompressionType.Lz4HC || customBlockCompression != CompressionType.Auto
                             ? "Wrong compression type or block data might be encrypted."
                             : "Block data might be encrypted.";

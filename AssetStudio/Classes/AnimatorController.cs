@@ -128,6 +128,11 @@ namespace AssetStudio
             }
             m_ConditionConstantArray = conditionConstantList.ToArray();
 
+            if (version.IsTuanjie && version >= (2022, 3, 62, 2)) //2022.3.62t2(1.8.0) and up
+            {
+                var m_PriorityOrder = reader.ReadInt32();
+            }
+
             m_DestinationState = reader.ReadUInt32();
             if (version >= 5) //5.0 and up
             {
@@ -157,7 +162,23 @@ namespace AssetStudio
                 m_CanTransitionToSelf = reader.ReadBoolean();
             }
 
+            if (version.IsTuanjie && version.IsInRange((2022, 3, 62, 8), (2022, 3, 62, 12))) //2022.3.62t8-t11(1.9.x)))
+            {
+                var m_UseInertialization = reader.ReadBoolean();
+            }
+
             reader.AlignStream();
+
+            if (version.IsTuanjie && version >= (2022, 3, 62, 12)) //2022.3.62t12(1.10.0) and up
+            {
+                var m_TransitionBlendMode = reader.ReadInt32();
+                var m_PoseBlendCurveMode = reader.ReadInt32();
+                var m_RootMotionBlendCurveMode = reader.ReadInt32();
+                var m_PoseBlendCurveKeyframeArraySize = reader.ReadInt32();
+                reader.Position += m_PoseBlendCurveKeyframeArraySize * 28; //skip m_PoseBlendCurveKeyframeArray[]
+                var m_RootMotionBlendCurveKeyframeArraySize = reader.ReadInt32();
+                reader.Position += m_RootMotionBlendCurveKeyframeArraySize * 28; //skip m_RootMotionBlendCurveKeyframeArray[]
+            }
         }
     }
 
@@ -278,7 +299,7 @@ namespace AssetStudio
             }
 
             m_ClipID = reader.ReadUInt32();
-            if (version == 4 && version.Minor >= 5) //4.5 - 5.0
+            if (version.IsInRange((4, 5, 2), 5)) //4.5.2 - 5.0 down
             {
                 m_ClipIndex = reader.ReadUInt32();
             }
@@ -400,6 +421,12 @@ namespace AssetStudio
             {
                 m_CycleOffset = reader.ReadSingle();
             }
+
+            if (version.IsTuanjie && version >= (2022, 3, 62, 2)) //2022.3.62t2(1.8.0) and up
+            {
+                var m_OverrideDuration = reader.ReadSingle();
+            }
+
             m_IKOnFeet = reader.ReadBoolean();
             if (version >= 5) //5.0 and up
             {
@@ -410,6 +437,11 @@ namespace AssetStudio
             if (version >= (4, 1)) //4.1 and up
             {
                 m_Mirror = reader.ReadBoolean();
+            }
+
+            if (version.IsTuanjie && version >= (2022, 3, 62, 2)) //2022.3.62t2(1.8.0) and up
+            {
+                var m_UseOverrideDuration = reader.ReadBoolean();
             }
 
             reader.AlignStream();
@@ -497,7 +529,13 @@ namespace AssetStudio
             }
 
             m_DefaultState = reader.ReadUInt32();
-            m_MotionSetCount = reader.ReadUInt32();
+            m_MotionSetCount = reader.ReadUInt32(); //m_SynchronizedLayerCount from 2018.2
+
+            if (version >= (6000, 4))
+            {
+                var m_EvaluateTransitionsOnStart = reader.ReadBoolean();
+                reader.AlignStream();
+            }
         }
     }
 
@@ -510,6 +548,7 @@ namespace AssetStudio
         public Vector3[] m_PositionValues;
         public Vector4[] m_QuaternionValues;
         public Vector3[] m_ScaleValues;
+        public ulong[] m_EntityIdValues;
 
         public ValueArray(ObjectReader reader)
         {
@@ -557,6 +596,18 @@ namespace AssetStudio
                     m_IntValues = reader.ReadInt32Array();
                     m_BoolValues = reader.ReadBooleanArray();
                     reader.AlignStream();
+                    if (version >= (6000, 2)) //6000.2 and up
+                    {
+                        var numEntities = reader.ReadInt32();
+                        var m_EntityIdList = new List<ulong>();
+                        for (var i = 0; i < numEntities; i++)
+                        {
+                            m_EntityIdList.Add(version >= (6000, 5) //6000.5 and up
+                                ? reader.ReadUInt64()
+                                : reader.ReadUInt32());
+                        }
+                        m_EntityIdValues = m_EntityIdList.ToArray();
+                    }
                 }
             }
         }
@@ -599,6 +650,11 @@ namespace AssetStudio
 
         public AnimatorController(ObjectReader reader) : base(reader)
         {
+            if (reader.version >= (6000, 4))
+            {
+                var m_EvaluateTransitionsOnStart = reader.ReadBoolean();
+                reader.AlignStream();
+            }
             var m_ControllerSize = reader.ReadUInt32();
             var m_Controller = new ControllerConstant(reader);
 

@@ -1,33 +1,35 @@
-﻿using System;
+﻿using AssetStudio;
+using System;
 using System.Collections.Specialized;
 using System.Linq;
-using AssetStudio;
-using Newtonsoft.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using UnityLive2DExtractor.CubismJsonConverters;
 using UnityLive2DExtractor.CubismUnityClasses;
 using UnityLive2DExtractor.Utilities;
+using static AssetStudio.Addons.CubismLive2D.CubismHelpers;
 
 namespace UnityLive2DExtractor
 {
     public static class CubismParsers
     {
-        public enum CubismMonoBehaviourType
+        public static readonly JsonSerializerOptions CubismJsonOptions;
+
+        static CubismParsers()
         {
-            FadeController,
-            FadeMotionList,
-            FadeMotion,
-            ExpressionController,
-            ExpressionList,
-            Expression,
-            Physics,
-            DisplayInfo,
-            PosePart,
-            Model,
-            RenderTexture,
+            CubismJsonOptions = new JsonSerializerOptions
+            {
+                Converters = { new MyJsonConverterFloat(asDecimal: true) },
+                NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+                PropertyNameCaseInsensitive = true,
+                IncludeFields = true,
+                WriteIndented = true,
+            };
         }
 
         public static string ParsePhysics(OrderedDictionary physicsDict, float motionFps)
         {
-            var cubismPhysicsRig = JsonConvert.DeserializeObject<CubismPhysics>(JsonConvert.SerializeObject(physicsDict)).Rig;
+            var cubismPhysicsRig = JsonSerializer.Deserialize<CubismPhysics>(JsonSerializer.SerializeToUtf8Bytes(physicsDict, CubismJsonOptions), CubismJsonOptions).Rig;
 
             var physicsSettings = new CubismPhysics3Json.SerializablePhysicsSettings[cubismPhysicsRig.SubRigs.Length];
             for (var i = 0; i < physicsSettings.Length; i++)
@@ -130,7 +132,10 @@ namespace UnityLive2DExtractor
                 },
                 PhysicsSettings = physicsSettings
             };
-            return JsonConvert.SerializeObject(physicsJson, Formatting.Indented, new MyJsonConverter2());
+            var physicsOptions = new JsonSerializerOptions(CubismJsonOptions);
+            physicsOptions.Converters.Clear();
+            physicsOptions.Converters.Add(new MyJsonConverterFloat());
+            return JsonSerializer.Serialize(physicsJson, physicsOptions);
         }
 
         public static OrderedDictionary ParseMonoBehaviour(MonoBehaviour m_MonoBehaviour, CubismMonoBehaviourType cubismMonoBehaviourType)
@@ -170,7 +175,7 @@ namespace UnityLive2DExtractor
                 case CubismMonoBehaviourType.PosePart:
                     fieldName = "groupindex";
                     break;
-                case CubismMonoBehaviourType.Model:
+                case CubismMonoBehaviourType.ModelPPtr:
                     fieldName = "_moc";
                     break;
                 case CubismMonoBehaviourType.RenderTexture:

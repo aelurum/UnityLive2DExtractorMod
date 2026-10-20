@@ -41,6 +41,7 @@
         /// </summary>
         DXT1,
         /// <summary>
+        /// Compressed color with alpha channel texture format.
         /// </summary>
         DXT3,
         /// <summary>
@@ -278,5 +279,78 @@
         /// Four channel (RGBA) texture format, 16-bits unsigned integer per channel.
         /// </summary>
         RGBA64,
+        /// <summary>
+        /// Single channel (R) texture format, 8-bits signed integer.
+        /// </summary>
+        R8_SIGNED,
+        /// <summary>
+        /// Two channel (RG) texture format, 8-bits signed integer per channel.
+        /// </summary>
+        RG16_SIGNED,
+        /// <summary>
+        /// Three channel (RGB) texture format, 8-bits signed integer per channel.
+        /// </summary>
+        RGB24_SIGNED,
+        /// <summary>
+        /// Four channel (RGBA) texture format, 8-bits signed integer per channel.
+        /// </summary>
+        RGBA32_SIGNED,
+        /// <summary>
+        /// Single channel (R) texture format, 16-bits signed integer.
+        /// </summary>
+        R16_SIGNED,
+        /// <summary>
+        /// Two channel (RG) texture format, 16-bits signed integer per channel.
+        /// </summary>
+        RG32_SIGNED,
+        /// <summary>
+        ///  Three color (RGB) texture format, 16-bits signed integer per channel.
+        /// </summary>
+        RGB48_SIGNED,
+        /// <summary>
+        /// Four channel (RGBA) texture format, 16-bits signed integer per channel.
+        /// </summary>
+        RGBA64_SIGNED,
+
+        //Tuanjie engine
+        //(adding 1000 for compatibility with Unity formats)
+        /// <summary>
+        /// Offset for Tuanjie texture formats.
+        /// </summary>
+        TUANJIE_OFFSET = 1000,
+        /// <summary>
+        /// PNG (32 bits) compressed RGBA texture format.
+        /// </summary>
+        PNG_32_RGBA = TUANJIE_OFFSET + 75,
+        /// <summary>
+        /// PNG (24 bits) compressed RGB texture format.
+        /// </summary>
+        PNG_24_RGB = TUANJIE_OFFSET + 76,
+        /// <summary>
+        /// PNG (8 bits) compressed RGBA texture format.
+        /// </summary>
+        PNG_8_RGBA = TUANJIE_OFFSET + 77,
+        /// <summary>
+        /// WebP (32 bits) compressed RGBA texture format.
+        /// </summary>
+        WebP_32 = TUANJIE_OFFSET + 78,
+        /// <summary>
+        /// WebP (24 bits) compressed RGB texture format.
+        /// </summary>
+        WebP_24 = TUANJIE_OFFSET + 79,
+    }
+
+    public static class TextureFormatExtensions
+    {
+        public static TextureFormat ToTuanjie(this TextureFormat format)
+        {
+            return format > TextureFormat.RGBA64 && format < TextureFormat.TUANJIE_OFFSET
+                ? TextureFormat.TUANJIE_OFFSET + (int)format
+                : format;
+        }
+
+        public static bool IsPng(this TextureFormat format) => format >= TextureFormat.PNG_32_RGBA && format <= TextureFormat.PNG_8_RGBA;
+
+        public static bool IsWebP(this TextureFormat format) => format == TextureFormat.WebP_24 || format == TextureFormat.WebP_32;
     }
 }

@@ -1,4 +1,5 @@
-﻿using System;
+﻿using AssetStudio.Classes.Tuanjie.AnimationClip;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -316,7 +317,10 @@ namespace AssetStudio
             attribute = reader.ReadAlignedString();
             path = reader.ReadAlignedString();
             classID = (ClassIDType)reader.ReadInt32();
-            script = new PPtr<MonoScript>(reader);
+            if (reader.version >= 2)
+            {
+                script = new PPtr<MonoScript>(reader);
+            }
             if (reader.version >= (2022, 2)) //2022.2 and up
             {
                 flags = reader.ReadInt32();
@@ -366,6 +370,47 @@ namespace AssetStudio
             {
                 flags = reader.ReadInt32();
             }
+        }
+    }
+
+    public class DiscreteKeyframe
+    {
+        public float time;
+        public int value;
+
+        public DiscreteKeyframe() { }
+
+        public DiscreteKeyframe(ObjectReader reader)
+        {
+            time = reader.ReadSingle();
+            value = reader.ReadInt32();
+        }
+    }
+
+    public class DiscreteCurve
+    {
+        public List<DiscreteKeyframe> curve;
+        public string attribute;
+        public string path;
+        public int classID;
+        public PPtr<MonoScript> script;
+        public int flags;
+
+        public DiscreteCurve() { }
+
+        public DiscreteCurve(ObjectReader reader)
+        {
+            int numCurves = reader.ReadInt32();
+            curve = new List<DiscreteKeyframe>();
+            for (var i = 0; i < numCurves; i++)
+            {
+                curve.Add(new DiscreteKeyframe(reader));
+            }
+            attribute = reader.ReadAlignedString();
+            path = reader.ReadAlignedString();
+            classID = reader.ReadInt32();
+            script = new PPtr<MonoScript>(reader);
+            flags = reader.ReadInt32();
         }
     }
 
@@ -505,7 +550,7 @@ namespace AssetStudio
         {
             var version = reader.version;
             data = reader.ReadUInt32Array();
-            if (version.IsInRange((2022, 3, 19), 2023) //2022.3.19f1 to 2023
+            if (version.IsInRange((2022, 3, 19), 2023) //2022.3.19f1 - 2023 down
                 || version >= (2023, 2, 8)) //2023.2.8f1 and up
             {
                 curveCount = reader.ReadUInt16();
@@ -528,7 +573,7 @@ namespace AssetStudio
 
             public StreamedCurveKey() { }
 
-            public StreamedCurveKey(BinaryReader reader)
+            public StreamedCurveKey(EndianBinaryReader reader)
             {
                 index = reader.ReadInt32();
                 coeff = reader.ReadSingleArray(4);
@@ -561,7 +606,7 @@ namespace AssetStudio
 
             public StreamedFrame() { }
 
-            public StreamedFrame(BinaryReader reader)
+            public StreamedFrame(EndianBinaryReader reader)
             {
                 time = reader.ReadSingle();
 
@@ -579,7 +624,7 @@ namespace AssetStudio
             var frameList = new List<StreamedFrame>();
             var buffer = new byte[data.Length * 4];
             Buffer.BlockCopy(data, 0, buffer, 0, buffer.Length);
-            using (var reader = new BinaryReader(new MemoryStream(buffer)))
+            using (var reader = new EndianBinaryReader(new MemoryStream(buffer), EndianType.LittleEndian))
             {
                 while (reader.BaseStream.Position < reader.BaseStream.Length)
                 {
@@ -679,45 +724,6 @@ namespace AssetStudio
         }
     }
 
-    public class ACLClip //Tuanjie
-    {
-        public uint m_FrameCount;
-        public uint m_BoneCount;
-        public float m_SampleRate;
-        public uint m_CurveCount;
-        public byte[] m_Tracks;
-        public uint[] m_ACLDecoderMap;
-        public bool m_UseACLFastSampleMode;
-
-        public ACLClip() { }
-
-        public ACLClip(ObjectReader reader)
-        {
-            var version = reader.version;
-            m_FrameCount = reader.ReadUInt32();
-            m_BoneCount = reader.ReadUInt32();
-            m_SampleRate = reader.ReadSingle();
-            if (version >= (2022, 3, 55)) //2022.3.55t1(1.5.0) and up
-            {
-                m_CurveCount = reader.ReadUInt32();
-            }
-            m_Tracks = reader.ReadUInt8Array();
-            if (version >= (2022, 3, 61)) //2022.3.61t1(1.6.0) and up
-            {
-                reader.AlignStream();
-            }
-            m_ACLDecoderMap = reader.ReadUInt32Array();
-            if (version > (2022, 3, 55) || (version == (2022, 3, 55) && version.Build >= 4)) //2022.3.55t4(1.5.3) and up
-            {
-                m_UseACLFastSampleMode = reader.ReadBoolean();
-                if (version >= (2022, 3, 61)) //2022.3.61t1(1.6.0) and up
-                {
-                    reader.AlignStream();
-                }
-            }
-        }
-    }
-
     public class OffsetPtr
     {
         public Clip data;
@@ -753,7 +759,7 @@ namespace AssetStudio
             {
                 m_Binding = new ValueArrayConstant(reader);
             }
-            if (version.IsTuanjie && (version > (2022, 3, 48) || (version == (2022, 3, 48) && version.Build >= 3))) //2022.3.48t3(1.4.0) and up
+            if (version.IsTuanjie && version >= (2022, 3, 48, 3)) //2022.3.48t3(1.4.0) and up
             {
                 m_ACLClip = new ACLClip(reader);
             }
@@ -896,6 +902,10 @@ namespace AssetStudio
             }
 
             m_Mirror = reader.ReadBoolean();
+            if (version.IsTuanjie && version >= (2022, 3, 62, 8)) //2022.3.62t8(1.9.0) and up
+            {
+                var m_LockToRoot = reader.ReadBoolean();
+            }
             if (version >= (4, 3)) //4.3 and up
             {
                 m_LoopTime = reader.ReadBoolean();
@@ -912,6 +922,11 @@ namespace AssetStudio
             m_KeepOriginalPositionY = reader.ReadBoolean();
             m_KeepOriginalPositionXZ = reader.ReadBoolean();
             m_HeightFromFeet = reader.ReadBoolean();
+            if (version.IsTuanjie && version >= (2022, 3, 62, 13)) //2022.3.62t13(1.10.1) and up
+            {
+                var m_AdditiveType = reader.ReadInt32();
+                var m_BasePoseType = reader.ReadInt32();
+            }
             reader.AlignStream();
         }
     }
@@ -926,6 +941,7 @@ namespace AssetStudio
         public byte isPPtrCurve;
         public byte isIntCurve;
         public byte isSerializeReferenceCurve;
+        public ushort metaData;
 
         public GenericBinding() { }
 
@@ -952,6 +968,10 @@ namespace AssetStudio
             if (version >= (2022, 2)) //2022.2 and up
             {
                 isSerializeReferenceCurve = reader.ReadByte();
+            }
+            if (version >= (6000, 5)) //6000.5.0a7 and up
+            {
+                metaData = reader.ReadUInt16();
             }
             reader.AlignStream();
         }
@@ -1068,6 +1088,7 @@ namespace AssetStudio
         public List<Vector3Curve> m_ScaleCurves;
         public List<FloatCurve> m_FloatCurves;
         public List<PPtrCurve> m_PPtrCurves;
+        public List<DiscreteCurve> m_DiscreteCurves;
         public float m_SampleRate;
         public int m_WrapMode;
         public AABB m_Bounds;
@@ -1080,9 +1101,9 @@ namespace AssetStudio
 
         public AnimationClip() { }
 
-        public AnimationClip(ObjectReader reader, byte[] type, JsonSerializerOptions jsonOptions, ObjectInfo objInfo) : base(reader)
+        public AnimationClip(ObjectReader reader, JsonSerializerOptions jsonOptions, ObjectInfo objInfo) : base(reader)
         {
-            var parsedAnimClip = JsonSerializer.Deserialize<AnimationClip>(type, jsonOptions);
+            var parsedAnimClip = JsonSerializer.Deserialize<AnimationClip>(TypeTreeHelper.ReadTypeByteArray(reader), jsonOptions);
             m_AnimationType = parsedAnimClip.m_AnimationType;
             if (version >= 5)//5.0 and up
             {
@@ -1105,6 +1126,7 @@ namespace AssetStudio
             m_ScaleCurves = parsedAnimClip.m_ScaleCurves;
             m_FloatCurves = parsedAnimClip.m_FloatCurves;
             m_PPtrCurves = parsedAnimClip.m_PPtrCurves;
+            m_DiscreteCurves = parsedAnimClip.m_DiscreteCurves;
             m_SampleRate = parsedAnimClip.m_SampleRate;
             m_WrapMode = parsedAnimClip.m_WrapMode;
             m_Bounds = parsedAnimClip.m_Bounds;
@@ -1141,6 +1163,22 @@ namespace AssetStudio
 
         public AnimationClip(ObjectReader reader) : base(reader)
         {
+            if (version < 2) //2.0 down
+            {
+                var numClassIDToTrack = reader.ReadInt32();
+                for (var i = 0; i < numClassIDToTrack; ++i)
+                {
+                    var first = reader.ReadInt32();
+                    var second = new PPtr<Object>(reader);
+                }
+                var numChildTracks = reader.ReadInt32();
+                for (var i = 0; i < numChildTracks; ++i)
+                {
+                    var path = reader.ReadAlignedString();
+                    var classId = reader.ReadInt32();
+                    var track = new PPtr<Object>(reader);
+                }
+            }
             if (version >= 5)//5.0 and up
             {
                 m_Legacy = reader.ReadBoolean();
@@ -1157,19 +1195,18 @@ namespace AssetStudio
             if (version >= (2, 6)) //2.6 and up
             {
                 m_Compressed = reader.ReadBoolean();
+                if (version >= (4, 3)) //4.3 and up
+                {
+                    m_UseHighQualityCurve = reader.ReadBoolean();
+                }
+                reader.AlignStream();
             }
-            if (version >= (4, 3))//4.3 and up
-            {
-                m_UseHighQualityCurve = reader.ReadBoolean();
-            }
-            reader.AlignStream();
             int numRCurves = reader.ReadInt32();
             m_RotationCurves = new List<QuaternionCurve>();
             for (var i = 0; i < numRCurves; i++)
             {
                 m_RotationCurves.Add(new QuaternionCurve(reader));
             }
-
             if (version >= (2, 6)) //2.6 and up
             {
                 int numCRCurves = reader.ReadInt32();
@@ -1179,7 +1216,6 @@ namespace AssetStudio
                     m_CompressedRotationCurves.Add(new CompressedAnimationCurve(reader));
                 }
             }
-
             if (!version.IsTuanjie)
             {
                 if (version >= (5, 3)) //5.3 and up
@@ -1189,14 +1225,12 @@ namespace AssetStudio
                 m_PositionCurves = Vector3CurveList(reader);
                 m_ScaleCurves = Vector3CurveList(reader);
             }
-
             int numFCurves = reader.ReadInt32();
             m_FloatCurves = new List<FloatCurve>();
             for (var i = 0; i < numFCurves; i++)
             {
                 m_FloatCurves.Add(new FloatCurve(reader));
             }
-
             if (version >= (4, 3)) //4.3 and up
             {
                 int numPtrCurves = reader.ReadInt32();
@@ -1206,7 +1240,15 @@ namespace AssetStudio
                     m_PPtrCurves.Add(new PPtrCurve(reader));
                 }
             }
-
+            if (version >= 7000) //7000.0.0a10 and up
+            {
+                int numDiscreteCurves = reader.ReadInt32();
+                m_DiscreteCurves = new List<DiscreteCurve>();
+                for (var i = 0; i < numDiscreteCurves; i++)
+                {
+                    m_DiscreteCurves.Add(new DiscreteCurve(reader));
+                }
+            }
             m_SampleRate = reader.ReadSingle();
             if (version >= (2, 6)) //2.6 and up
             {
@@ -1260,11 +1302,14 @@ namespace AssetStudio
                 var m_HasMotionFloatCurves = reader.ReadBoolean();
                 reader.AlignStream();
             }
-            int numEvents = reader.ReadInt32();
-            m_Events = new List<AnimationEvent>();
-            for (var i = 0; i < numEvents; i++)
+            if (version >= (2, 1)) //2.1 and up
             {
-                m_Events.Add(new AnimationEvent(reader));
+                int numEvents = reader.ReadInt32();
+                m_Events = new List<AnimationEvent>();
+                for (var i = 0; i < numEvents; i++)
+                {
+                    m_Events.Add(new AnimationEvent(reader));
+                }
             }
             if (version >= 2017) //2017 and up
             {

@@ -7,6 +7,8 @@ namespace AssetStudio
         public ushort firstSubMesh;
         public ushort subMeshCount;
 
+        public StaticBatchInfo() { }
+
         public StaticBatchInfo(ObjectReader reader)
         {
             firstSubMesh = reader.ReadUInt16();
@@ -20,14 +22,25 @@ namespace AssetStudio
         public StaticBatchInfo m_StaticBatchInfo;
         public uint[] m_SubsetIndices;
 
+        protected Renderer() { }
+
         protected Renderer(ObjectReader reader) : base(reader)
         {
             if (version < 5) //5.0 down
             {
-                var m_Enabled = reader.ReadBoolean();
-                var m_CastShadows = reader.ReadBoolean();
-                var m_ReceiveShadows = reader.ReadBoolean();
-                var m_LightmapIndex = reader.ReadByte();
+                if (version >= (1, 5))
+                {
+                    var m_Enabled = reader.ReadBoolean();
+                    if (version >= (2, 0))
+                    {
+                        var m_CastShadows = reader.ReadBoolean();
+                        var m_ReceiveShadows = reader.ReadBoolean();
+                        if (version >= (2, 1))
+                        {
+                            var m_LightmapIndex = reader.ReadByte();
+                        }
+                    }
+                }
             }
             else //5.0 and up
             {
@@ -58,14 +71,21 @@ namespace AssetStudio
                     if (version.IsTuanjie) //2022.3.2t3(1.0.0) and up
                     {
                         var m_virtualGeometry = reader.ReadByte();
-                        var m_virtualGeometryShadow = reader.ReadByte();
-                        if (version > (2022, 3, 48) || (version == (2022, 3, 48) && version.Build >= 3)) //2022.3.48t3(1.4.0) and up
+                        if (version < (2022, 3, 62, 2)) //2022.3.62t2(1.8.0) down
+                        {
+                            var m_virtualGeometryShadow = reader.ReadByte();
+                        }
+                        if (version >= (2022, 3, 48, 3)) //2022.3.48t3(1.4.0) and up
                         {
                             reader.AlignStream();
                             var m_ShadingRate = reader.ReadByte();
                             if (version >= (2022, 3, 61)) //2022.3.61t1(1.6.0) and up
                             {
                                 var m_ForceDisableGRD = reader.ReadByte();
+                            }
+                            if (version >= (2022, 3, 62, 12)) //2022.3.62t12(1.10.0) and up
+                            {
+                                var m_ForceDisableSmallMeshCull = reader.ReadByte();
                             }
                         }
                     }
@@ -79,6 +99,12 @@ namespace AssetStudio
                         var m_SmallMeshCulling = reader.ReadByte();
                     }
                     reader.AlignStream();
+                    if (version >= (6000, 2)) //6000.2 and up
+                    {
+                        var m_ForceMeshLod = reader.ReadInt16();
+                        reader.AlignStream();
+                        var m_MeshLodSelectionBias = reader.ReadSingle();
+                    }
                 }
                 else
                 {
@@ -119,10 +145,15 @@ namespace AssetStudio
             {
                 m_Materials.Add(new PPtr<Material>(reader));
             }
+            if (reader.version < (2, 1)) //2.1 down
+                return;
 
             if (version < 3) //3.0 down
             {
+                //var unk = reader.ReadVector3(); //unity-iphone 1.7
                 var m_LightmapTilingOffset = reader.ReadVector4();
+                if (m_LightmapTilingOffset.W > 0) //if unity-iphone 1.7
+                    m_LightmapTilingOffset = reader.ReadVector3();
             }
             else //3.0 and up
             {
@@ -158,7 +189,9 @@ namespace AssetStudio
 
             if (version >= (4, 3)) //4.3 and up
             {
-                if (version == (4, 3)) //4.3
+                if (version == (4, 3) //4.3.x
+                    || (version == (5, 6, 0) && version.IsBeta) //5.6.0bx
+                    || (version == (5, 6, 0) && version.Build < 3)) //5.6.0f1 - 5.6.0f2
                 {
                     var m_SortingLayer = reader.ReadInt16();
                 }
@@ -167,13 +200,18 @@ namespace AssetStudio
                     var m_SortingLayerID = reader.ReadInt32();
                 }
 
-                if (version > (5, 6) || (version == (5, 6) && version.Build >= 3)) //5.6.0f3 and up
+                if (version > (5, 6, 0) || (version >= (5, 6, 0, 3) && !version.IsBeta)) //5.6.0f3 and up
                 {
                     var m_SortingLayer = reader.ReadInt16();
                 }
 
                 var m_SortingOrder = reader.ReadInt16();
                 reader.AlignStream();
+            }
+
+            if (version >= (6000, 3)) //6000.3 and up
+            {
+                var m_MaskInteraction = reader.ReadInt32();
             }
         }
     }

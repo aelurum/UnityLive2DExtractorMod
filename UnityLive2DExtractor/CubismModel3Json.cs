@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json.Linq;
+﻿using System.Text.Json.Nodes;
 
 namespace UnityLive2DExtractor
 {
@@ -16,8 +16,8 @@ namespace UnityLive2DExtractor
             public string Physics;
             public string Pose;
             public string DisplayInfo;
-            public JObject Motions;
-            public JArray Expressions;
+            public JsonObject Motions;
+            public JsonArray Expressions;
         }
 
         public class SerializableGroup

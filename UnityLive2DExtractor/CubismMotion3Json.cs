@@ -1,11 +1,12 @@
 ﻿// File Format Specifications
 // https://github.com/Live2D/CubismSpecs/blob/master/FileFormats/motion3.json.md
 
+using AssetStudio;
+using UnityLive2DExtractor.CubismJsonConverters;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using AssetStudio;
-using UnityLive2DExtractor.CubismUnityClasses;
+using System.Text.Json.Serialization;
 
 namespace UnityLive2DExtractor
 {
@@ -37,6 +38,7 @@ namespace UnityLive2DExtractor
             public string Id;
             public float FadeInTime;
             public float FadeOutTime;
+            [JsonConverter(typeof(MyJsonConverterFloatList))]
             public List<float> Segments;
         }
 
@@ -99,7 +101,18 @@ namespace UnityLive2DExtractor
             totalSegmentCount++;
         }
 
-        public CubismMotion3Json(CubismFadeMotionData fadeMotion, HashSet<string> paramNames, HashSet<string> partNames, bool forceBezier)
+        private static void FillSingleSegment(Keyframe<float> curve, SerializableCurve cubismCurve, float time, ref int totalPointCount, ref int totalSegmentCount)
+        {
+            var value = cubismCurve.Segments[1];
+            var id = float.IsPositiveInfinity(curve.inSlope) ? 2f : 0f;
+            cubismCurve.Segments.Add(id); // Segment ID
+            cubismCurve.Segments.Add(time);
+            cubismCurve.Segments.Add(value);
+            totalPointCount++;
+            totalSegmentCount++;
+        }
+
+        public CubismMotion3Json(CubismUnityClasses.CubismFadeMotionData fadeMotion, HashSet<string> paramNames, HashSet<string> partNames, bool forceBezier)
         {
             Version = 3;
             Meta = new SerializableMeta
@@ -153,7 +166,7 @@ namespace UnityLive2DExtractor
                         else
                         {
                             target = paramId.ToLower().Contains("part") ? "PartOpacity" : "Parameter";
-                            Console.WriteLine($"[{fadeMotion.m_Name}] Binding error: Unable to find \"{paramId}\" among the model parts/parameters");
+                            Console.WriteLine($"[{fadeMotion.m_Name}] Binding failed: Unable to find \"{paramId}\" among the model parts/parameters");
                         }
                         break;
                 }
@@ -175,6 +188,10 @@ namespace UnityLive2DExtractor
                         fadeMotion.ParameterCurves[i].m_Curve[0].value
                     }
                 };
+                if (fadeMotion.ParameterCurves[i].m_Curve.Count == 1)
+                {
+                    FillSingleSegment(fadeMotion.ParameterCurves[i].m_Curve[0], Curves[actualCurveCount], Meta.Duration, ref totalPointCount, ref totalSegmentCount);
+                }
                 for (var j = 1; j < fadeMotion.ParameterCurves[i].m_Curve.Count; j++)
                 {
                     var curve = fadeMotion.ParameterCurves[i].m_Curve[j];
@@ -230,6 +247,10 @@ namespace UnityLive2DExtractor
                         track.Curve[0].value
                     }
                 };
+                if (track.Curve.Count == 1)
+                {
+                    FillSingleSegment(CreateKeyFrame(track.Curve[0]), Curves[i], Meta.Duration, ref totalPointCount, ref totalSegmentCount);
+                }
                 for (var j = 1; j < track.Curve.Count; j++)
                 {
                     var curve = CreateKeyFrame(track.Curve[j]);

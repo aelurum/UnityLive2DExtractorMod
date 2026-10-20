@@ -1,6 +1,6 @@
 ﻿using System.Collections.Generic;
 
-namespace AssetStudio
+namespace AssetStudio.Addons.CubismLive2D
 {
     public class CubismModel
     {
@@ -21,6 +21,17 @@ namespace AssetStudio
         {
             Name = m_GameObject.m_Name;
             ModelGameObject = m_GameObject;
+            RenderTextureList = new List<MonoBehaviour>();
+            ParamDisplayInfoList = new List<MonoBehaviour>();
+            PartDisplayInfoList = new List<MonoBehaviour>();
+            PosePartList = new List<MonoBehaviour>();
+            ClipMotionList = new List<AnimationClip>();
+        }
+
+        public CubismModel(MonoBehaviour mocMono)
+        {
+            Name = mocMono.m_Name;
+            ModelGameObject = null;
             RenderTextureList = new List<MonoBehaviour>();
             ParamDisplayInfoList = new List<MonoBehaviour>();
             PartDisplayInfoList = new List<MonoBehaviour>();

@@ -1,59 +1,27 @@
-﻿using System;
-using System.IO;
-using AssetStudio;
-using SixLabors.ImageSharp;
+﻿using AssetStudio;
+﻿using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using System.IO;
 
 namespace UnityLive2DExtractor.Utilities
 {
     public static class Texture2DExtensions
     {
-        public static Image<Bgra32> ConvertToImage(this Texture2D m_Texture2D, bool flip)
+        public static bool TryConvertToImage(this Texture2D m_Texture2D, bool flip, out Image<Bgra32> image)
         {
-            var converter = new Texture2DConverter(m_Texture2D);
-            var buff = BigArrayPool<byte>.Shared.Rent(converter.OutputDataSize);
-            var spanBuff = buff.AsSpan(0, converter.OutputDataSize);
-            try
-            {
-                if (!converter.DecodeTexture2D(buff)) 
-                    return null;
-
-                Image<Bgra32> image;
-                if (converter.UsesSwitchSwizzle)
-                {
-                    var uncroppedSize = converter.GetUncroppedSize();
-                    image = Image.LoadPixelData<Bgra32>(spanBuff, uncroppedSize.Width, uncroppedSize.Height);
-                    image.Mutate(x => x.Crop(m_Texture2D.m_Width, m_Texture2D.m_Height));
-                }
-                else
-                {
-                    image = Image.LoadPixelData<Bgra32>(spanBuff, m_Texture2D.m_Width, m_Texture2D.m_Height);
-                }
-
-                if (flip)
-                {
-                    image.Mutate(x => x.Flip(FlipMode.Vertical));
-                }
-                return image;
-            }
-            finally
-            {
-                BigArrayPool<byte>.Shared.Return(buff, clearArray: true);
-            }
+            return new Texture2DConverter(m_Texture2D).TryConvertToBgra32Image(flip, out image);
         }
 
         public static MemoryStream ConvertToStream(this Texture2D m_Texture2D, ImageFormat imageFormat, bool flip)
         {
-            var image = ConvertToImage(m_Texture2D, flip);
-            if (image != null)
+            var converter = new Texture2DConverter(m_Texture2D);
+            if (!converter.TryConvertToBgra32Image(flip, out var image))
+                return null;
+
+            using (image)
             {
-                using (image)
-                {
-                    return image.ConvertToStream(imageFormat);
-                }
+                return image.ConvertToStream(imageFormat);
             }
-            return null;
         }
     }
 }

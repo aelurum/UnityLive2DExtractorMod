@@ -1,18 +1,97 @@
-﻿using System;
-using System.Buffers.Binary;
+﻿using AssetStudio.Classes.Tuanjie.Mesh;
+using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using static AssetStudio.CustomOptions.GameSpecific.CustomMeshOptions;
 
 namespace AssetStudio
 {
+    public class MeshData
+    {
+        public readonly List<uint> IndexBufferList;
+        public readonly bool IsTriangleStrip;
+
+        public MeshData(ObjectReader reader)
+        {
+            IndexBufferList = new List<uint>();
+
+            var facesCount = reader.ReadInt32();
+            for (var i = 0; i < facesCount; i++)
+            {
+                for (var j = 0; j < 3; j++) //Face data (Vector3)
+                {
+                    IndexBufferList.Add(reader.ReadUInt16());
+                }
+            }
+
+            var stripsCount = reader.ReadInt32();
+            for (var i = 0; i < stripsCount; i++)
+            {
+                IndexBufferList.Add(reader.ReadUInt16());
+            }
+
+            IsTriangleStrip = stripsCount > 0;
+        }
+    }
+
+    public class LOD
+    {
+        private readonly List<MeshData> m_MeshData;
+        private readonly int m_VertexCount;
+        private readonly List<uint> indexBufferList;
+
+        public LOD(ObjectReader reader)
+        {
+            m_MeshData = new List<MeshData>();
+            indexBufferList = new List<uint>();
+            var meshDataCount = reader.ReadInt32();
+            for (var i = 0; i < meshDataCount; i++)
+            {
+                var meshData = new MeshData(reader);
+                m_MeshData.Add(meshData);
+                indexBufferList.AddRange(meshData.IndexBufferList);
+            }
+
+            if (reader.version < (1, 5))
+            {
+                m_VertexCount = reader.ReadInt32();
+                var m_NewVertexStart = reader.ReadInt32();
+                var m_MeshError = reader.ReadSingle();
+                var m_MorphToVertexCount = reader.ReadInt32();
+                reader.Position += m_MorphToVertexCount * 2; //skip UInt16[] m_MorphToVertex
+            }
+        }
+
+        public List<SubMesh> GetSubMeshes()
+        {
+            var subMeshList = new List<SubMesh>(m_MeshData.Count);
+            foreach (var meshData in m_MeshData)
+            {
+                subMeshList.Add(new SubMesh
+                {
+                    firstByte = 0, //todo?
+                    indexCount = (uint)meshData.IndexBufferList.Count,
+                    topology = meshData.IsTriangleStrip ? GfxPrimitiveType.TriangleStrip : GfxPrimitiveType.Triangles,
+                    vertexCount = (uint)m_VertexCount,
+                });
+            }
+            return subMeshList;
+        }
+
+        public uint[] GetIndexBuffer()
+        {
+            return indexBufferList.ToArray();
+        }
+    }
+
     public class MinMaxAABB
     {
         public Vector3 m_Min;
         public Vector3 m_Max;
 
-        public MinMaxAABB(BinaryReader reader)
+        public MinMaxAABB(ObjectReader reader)
         {
             m_Min = reader.ReadVector3();
             m_Max = reader.ReadVector3();
@@ -415,6 +494,8 @@ namespace AssetStudio
         public uint vertexCount;
         public AABB localAABB;
 
+        public SubMesh() { }
+
         public SubMesh(ObjectReader reader)
         {
             var version = reader.version;
@@ -441,105 +522,7 @@ namespace AssetStudio
             }
         }
     }
-
-    public class VGPackedHierarchyNode
-    {
-        public Vector4[] LODBounds = new Vector4[8];
-        public Vector3[] AABBCenter = new Vector3[8];
-        public uint[] MinLODError_MaxParentLODError = new uint[8];
-        public Vector3[] AABBExtent = new Vector3[8];
-        public uint[] ChildStartIndex = new uint[8];
-        public uint[] PageIndex_PageCount_PageBlockCount = new uint[8];
-
-        public VGPackedHierarchyNode(BinaryReader reader)
-        {
-            for (var i = 0; i < 8; i++)
-            {
-                LODBounds[i] = reader.ReadVector4();
-                AABBCenter[i] = reader.ReadVector3();
-                MinLODError_MaxParentLODError[i] = reader.ReadUInt32();
-                AABBExtent[i] = reader.ReadVector3();
-                ChildStartIndex[i] = reader.ReadUInt32();
-                PageIndex_PageCount_PageBlockCount[i] = reader.ReadUInt32();
-            }
-        }
-    }
-
-    public class VGPageStreamingInfo
-    {
-        public uint offset;
-        public uint wholeSize;
-        public uint dataSize;
-        public uint dependencyOffset;
-        public uint dependencyCount;
-        public uint flags;
-
-        public VGPageStreamingInfo(BinaryReader reader)
-        {
-            offset = reader.ReadUInt32();
-            wholeSize = reader.ReadUInt32();
-            dataSize = reader.ReadUInt32();
-            dependencyOffset = reader.ReadUInt32();
-            dependencyCount = reader.ReadUInt32();
-            flags = reader.ReadUInt32();
-        }
-    }
-
-    public class SharedClusterData //Tuanjie
-    {
-        public SharedClusterData(ObjectReader reader, byte rev)
-        {
-            var m_LightmapUseUV1 = reader.ReadInt32();
-            var m_fileScale = reader.ReadSingle();
-            if (rev == 1)
-            {
-                var NumInputTriangles = reader.ReadUInt32();
-                var NumInputVertices = reader.ReadUInt32();
-                var NumInputMeshes = reader.ReadUInt16();
-                var NumInputTexCoords = reader.ReadUInt16();
-                var ResourceFlags = reader.ReadUInt32();
-            }
-            var rootClusterPageSize = reader.ReadInt32();
-            reader.Position += rootClusterPageSize; //skip byte[] rootClusterPage
-            if (rev == 1)
-            {
-                var imposterAtlasSize = reader.ReadInt32();
-                reader.Position += imposterAtlasSize * 2; //skip ushort[] imposterAtlas
-            }
-            var hierarchyNodesSize = reader.ReadInt32();
-            for (var i = 0; i < hierarchyNodesSize; i++)
-            {
-                var hierarchyNode = new VGPackedHierarchyNode(reader);
-            }
-            if (rev == 1)
-            {
-                var hierarchyRootOffsetsSize = reader.ReadInt32();
-                reader.Position += hierarchyRootOffsetsSize * 4; //skip uint[] hierarchyRootOffsets
-            }
-            var pageStreamingInfosSize = reader.ReadInt32();
-            for (var i = 0; i < pageStreamingInfosSize; i++)
-            {
-                var pageStreamingInfo = new VGPageStreamingInfo(reader);
-            }
-            var pageIndicesOfDependenciesSize = reader.ReadInt32();
-            reader.Position += pageIndicesOfDependenciesSize * 4; //skip uint[] pageIndicesOfDependencies
-            if (rev == 2)
-            {
-                var inputTrianglesCount = reader.ReadUInt32();
-                var inputVerticesCount = reader.ReadUInt32();
-                var inputMeshesCount = reader.ReadUInt16();
-                var inputTexCoordsCount = reader.ReadUInt16();
-                var resourceFlags = reader.ReadUInt32();
-                var imposterAtlasSize = reader.ReadInt32();
-                reader.Position += imposterAtlasSize * 2; //skip ushort[] imposterAtlas
-                var hierarchyRootOffsetsSize = reader.ReadInt32();
-                reader.Position += hierarchyRootOffsetsSize * 4; //skip uint[] hierarchyRootOffsets
-            }
-            var streamableClusterPageSize = reader.ReadInt32();
-            reader.Position += streamableClusterPageSize; //skip byte[] streamableClusterPageSize
-        }
-    }
-
+    
     public sealed class Mesh : NamedObject
     {
         private bool isLoaded;
@@ -572,37 +555,41 @@ namespace AssetStudio
 
         public Mesh(ObjectReader reader) : base(reader)
         {
-            if (version < (3, 5)) //3.5 down
+            if (version < 2) //2.0 down
             {
-                m_Use16BitIndices = reader.ReadInt32() > 0;
-            }
-
-            if (version <= (2, 5)) //2.5 and down
-            {
-                int m_IndexBufferSize = reader.ReadInt32();
-
-                if (m_Use16BitIndices)
+                var m_LODDataCount = reader.ReadInt32();
+                if (m_LODDataCount <= 0)
                 {
-                    var indexBufferList = new List<uint>();
-                    for (var i = 0; i < m_IndexBufferSize / 2; i++)
-                    {
-                        indexBufferList.Add(reader.ReadUInt16());
-                    }
-
-                    reader.AlignStream();
-                    m_IndexBuffer = indexBufferList.ToArray();
+                    Logger.Warning("Can't find lod0 mesh data");
+                    return;
                 }
-                else
+                var lod0 = new LOD(reader);
+                for (var i = 1; i < m_LODDataCount; i++)
                 {
-                    m_IndexBuffer = reader.ReadUInt32Array(m_IndexBufferSize / 4);
+                    _ = new LOD(reader);
                 }
+                m_IndexBuffer = lod0.GetIndexBuffer();
+                m_SubMeshes = lod0.GetSubMeshes();
             }
-
-            int m_SubMeshesSize = reader.ReadInt32();
-            m_SubMeshes = new List<SubMesh>();
-            for (var i = 0; i < m_SubMeshesSize; i++)
+            else //2.0 and up
             {
-                m_SubMeshes.Add(new SubMesh(reader));
+                if (version < (3, 5)) //2.0 - 3.5 down
+                {
+                    m_Use16BitIndices = reader.ReadInt32() > 0;
+                }
+
+                if (version < (2, 6)) //2.0 - 2.6 down
+                {
+                    m_IndexBuffer = ReadIndexBuffer(reader, m_Use16BitIndices);
+                }
+
+                var m_SubMeshesCount = reader.ReadInt32();
+                reader.ThrowIfTooLarge(m_SubMeshesCount * 12f);
+                m_SubMeshes = new List<SubMesh>();
+                for (var i = 0; i < m_SubMeshesCount; i++)
+                {
+                    m_SubMeshes.Add(new SubMesh(reader));
+                }
             }
 
             if (version >= (4, 1)) //4.1 and up
@@ -621,14 +608,12 @@ namespace AssetStudio
             {
                 if (version >= 2019) //2019 and up
                 {
-                    var m_BonesAABBSize = reader.ReadInt32();
-                    for (var i = 0; i < m_BonesAABBSize; i++)
-                    {
-                        var m_BonesAABB = new MinMaxAABB(reader);
-                    }
+                    var m_BonesAABBCount = reader.ReadInt32();
+                    reader.ThrowIfTooLarge(m_BonesAABBCount * 24);
+                    reader.Position += m_BonesAABBCount * 24; //skip MinMaxAABB[] m_BonesAABB
 
-                    var m_VariableBoneCountWeightsSize = reader.ReadInt32();
-                    reader.Position += m_VariableBoneCountWeightsSize * 4; //skip uint[] m_VariableBoneCountWeights
+                    var m_VariableBoneCountWeightsCount = reader.ReadInt32();
+                    reader.Position += m_VariableBoneCountWeightsCount * 4; //skip uint[] m_VariableBoneCountWeights
                 }
 
                 var m_MeshCompression = reader.ReadByte();
@@ -642,24 +627,40 @@ namespace AssetStudio
                     var m_KeepVertices = reader.ReadBoolean();
                     var m_KeepIndices = reader.ReadBoolean();
                 }
+                reader.AlignStream();
 
                 if (version.IsTuanjie)
                 {
-                    if (version < (2022, 3, 48) || (version == (2022, 3, 48) && version.Build < 3)) //2022.3.48t3(1.4.0) down
+                    var tuanjieParsingMode = assetsFile.assetsManager.Options.GameSpecific.Meshes.TuanjieMeshParsingMode;
+                    var parseAsTuanjie = tuanjieParsingMode == MeshParsingMode.Tuanjie;
+                    if (tuanjieParsingMode == MeshParsingMode.Auto)
                     {
-                        _ = new SharedClusterData(reader, rev: 1);
+                        //Tuanjie features becomes optional from v1.6.1, but idk in what cases (platform dependent?)
+                        parseAsTuanjie = version < (2022, 3, 61, 2) || !serializedType.Match(6165448184371784201, 16777665667907586384);
                     }
-                    else if (version < (2022, 3, 61) || (version == (2022, 3, 61) && version.Build < 2)) //2022.3.48t3(1.4.0) - 2022.3.61t1(1.6.0)
+
+                    if (parseAsTuanjie)
                     {
-                        _ = new SharedClusterData(reader, rev: 2);
-                    }
-                    else //2022.3.61t2(1.6.1) and up
-                    {
-                        reader.AlignStream();
-                        _ = new SharedClusterData(reader, rev: 3);
+                        if (version >= (2022, 3, 62)) //2022.3.62t1(1.7.0) and up
+                        {
+                            var m_GIFacetMesh = new GIFacetMesh(reader);
+                            var m_GISDFMesh = new GISDFMesh(reader);
+                        }
+
+                        if (version < (2022, 3, 48, 3)) //2022.3.48t3(1.4.0) down
+                        {
+                            _ = new SharedClusterData(reader, rev: 1);
+                        }
+                        else if (version < (2022, 3, 61, 2)) //2022.3.48t3(1.4.0) - 2022.3.61t1(1.6.0)
+                        {
+                            _ = new SharedClusterData(reader, rev: 2);
+                        }
+                        else //2022.3.61t2(1.6.1) and up
+                        {
+                            _ = new SharedClusterData(reader, rev: 3);
+                        }
                     }
                 }
-                reader.AlignStream();
 
                 //Unity fixed it in 2017.3.1p1 and later versions
                 if (version >= (2017, 4) //2017.4
@@ -670,22 +671,7 @@ namespace AssetStudio
                     m_Use16BitIndices = m_IndexFormat == 0;
                 }
 
-                int m_IndexBufferSize = reader.ReadInt32();
-                if (m_Use16BitIndices)
-                {
-                    var indexBufferList = new List<uint>();
-                    for (var i = 0; i < m_IndexBufferSize / 2; i++)
-                    {
-                        indexBufferList.Add(reader.ReadUInt16());
-                    }
-
-                    reader.AlignStream();
-                    m_IndexBuffer = indexBufferList.ToArray();
-                }
-                else
-                {
-                    m_IndexBuffer = reader.ReadUInt32Array(m_IndexBufferSize / 4);
-                }
+                m_IndexBuffer = ReadIndexBuffer(reader, m_Use16BitIndices);
             }
 
             if (version < (3, 5)) //3.4.2 and earlier
@@ -693,21 +679,30 @@ namespace AssetStudio
                 m_VertexCount = reader.ReadInt32();
                 m_Vertices = reader.ReadSingleArray(m_VertexCount * 3); //Vector3
 
-                var numSkin = reader.ReadInt32();
-                reader.ThrowIfTooLarge(numSkin * 32f);
-                m_Skin = new BoneWeights4[numSkin];
-                for (var s = 0; s < numSkin; s++)
+                if (version >= (1, 5)) //1.5 - 3.5 down
                 {
-                    m_Skin[s] = new BoneWeights4(reader);
-                }
+                    var numSkin = reader.ReadInt32();
+                    reader.ThrowIfTooLarge(numSkin * 32f);
+                    m_Skin = new BoneWeights4[numSkin];
+                    for (var s = 0; s < numSkin; s++)
+                    {
+                        m_Skin[s] = new BoneWeights4(reader);
+                    }
 
-                m_BindPose = reader.ReadMatrixArray();
+                    if (version >= (2, 1)) //2.1 - 3.5 down
+                    {
+                        m_BindPose = reader.ReadMatrixArray();
+                    }
+                }
 
                 m_UV0 = reader.ReadSingleArray(reader.ReadInt32() * 2); //Vector2
 
-                m_UV1 = reader.ReadSingleArray(reader.ReadInt32() * 2); //Vector2
+                if (version >= (1, 5)) //1.5 - 3.5 down
+                {
+                    m_UV1 = reader.ReadSingleArray(reader.ReadInt32() * 2); //Vector2
+                }
 
-                if (version <= (2, 5)) //2.5 and down
+                if (version < (2, 6)) //2.6 down
                 {
                     int m_TangentSpaceSize = reader.ReadInt32();
                     reader.ThrowIfTooLarge(m_TangentSpaceSize * 28f);
@@ -727,7 +722,6 @@ namespace AssetStudio
                 else //2.6.0 and later
                 {
                     m_Tangents = reader.ReadSingleArray(reader.ReadInt32() * 4); //Vector4
-
                     m_Normals = reader.ReadSingleArray(reader.ReadInt32() * 3); //Vector3
                 }
             }
@@ -769,16 +763,29 @@ namespace AssetStudio
                 }
                 m_Colors = m_ColorsList.ToArray();
 
-                int m_CollisionTrianglesSize = reader.ReadInt32();
-                reader.Position += m_CollisionTrianglesSize * 4; //UInt32 indices
-                int m_CollisionVertexCount = reader.ReadInt32();
+                if (version >= (1, 5)) //1.5 - 3.5 down
+                {
+                    int m_CollisionTrianglesSize = reader.ReadInt32();
+                    reader.Position += m_CollisionTrianglesSize * 4; //UInt32 indices
+                    int m_CollisionVertexCount = reader.ReadInt32();
+                }
             }
 
-            int m_MeshUsageFlags = reader.ReadInt32();
+            if (version.IsInRange((2, 5), (6000, 6))) //2.5 - 6000.6 down
+            {
+                int m_MeshUsageFlags = reader.ReadInt32();
+            }
 
             if (version >= (2022, 1)) //2022.1 and up
             {
                 int m_CookingOptions = reader.ReadInt32();
+            }
+
+            if (version >= (6000, 6)) //6000.6 and up
+            {
+                var m_PreBakeConvexCollisionMesh = reader.ReadBoolean();
+                var m_PreBakeTriangleCollisionMesh = reader.ReadBoolean();
+                reader.AlignStream();
             }
 
             if (version >= 5) //5.0 and up
@@ -805,14 +812,40 @@ namespace AssetStudio
                 m_StreamData = new StreamingInfo(reader);
             }
 
-            if (version.IsTuanjie && (version > (2022, 3, 2) || (version == (2022, 3, 2) && version.Build >= 13))) //2022.3.2t13(1.2.0) and up
+            if (version.IsTuanjie && version >= (2022, 3, 2, 13)) //2022.3.2t13(1.2.0) and up
             {
                 var m_GenerateGeometryBuffer = reader.ReadBoolean();
                 m_HasVirtualGeometryMesh = reader.ReadBoolean();
             }
 
-            if (!assetsFile.assetsManager.MeshLazyLoad)
+            //m_MeshLodInfo = new MeshLodInfo(reader) //6000.2 and up
+
+            if (assetsFile.assetsManager.Options.MeshPreProcessing)
                 ProcessData();
+        }
+
+        private static uint[] ReadIndexBuffer(ObjectReader reader, bool use16BitIndices)
+        {
+            var indexBufferSize = reader.ReadInt32();
+            reader.ThrowIfTooLarge(indexBufferSize);
+
+            if (use16BitIndices)
+            {
+                var indexBuffer = new uint[indexBufferSize / 2];
+                for (var i = 0; i < indexBufferSize / 2; i++)
+                {
+                    indexBuffer[i] = reader.ReadUInt16();
+                }
+                if (reader.version >= (2, 1))
+                {
+                    reader.AlignStream();
+                }
+                return indexBuffer;
+            }
+            else
+            {
+                return reader.ReadUInt32Array(indexBufferSize / 4);
+            }
         }
 
         public void ProcessData()
@@ -821,41 +854,54 @@ namespace AssetStudio
                 return;
 
             var isStreamedDataSize = false;
-            if (!string.IsNullOrEmpty(m_StreamData?.path))
+            try
             {
-                if (m_VertexData.m_VertexCount > 0)
+                if (!string.IsNullOrEmpty(m_StreamData?.path))
                 {
-                    m_VertexData.m_DataSize = BigArrayPool<byte>.Shared.Rent((int)m_StreamData.size);
-                    var resourceReader = new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size);
-                    resourceReader.GetData(m_VertexData.m_DataSize);
-                    isStreamedDataSize = true;
+                    if (m_VertexData.m_VertexCount > 0)
+                    {
+                        m_VertexData.m_DataSize = BigArrayPool<byte>.Shared.Rent((int)m_StreamData.size);
+                        var resourceReader = new ResourceReader(m_StreamData.path, assetsFile, m_StreamData.offset, m_StreamData.size, type);
+                        resourceReader.GetData(m_VertexData.m_DataSize);
+                        isStreamedDataSize = true;
+                    }
                 }
-            }
-            if (version >= (3, 5)) //3.5 and up
-            {
-                ReadVertexData();
-            }
 
-            if (version >= (2, 6)) //2.6.0 and later
-            {
-                DecompressCompressedMesh();
-            }
+                if (version >= (3, 5)) //3.5 and up
+                {
+                    ReadVertexData();
+                }
 
-            if (m_IndexBuffer.Length == 0)
-            {
-                var msg = m_HasVirtualGeometryMesh
-                    ? "Unsupported mesh type: Virtual Geometry"
-                    : "Cannot process empty mesh";
-                Logger.Warning($"{msg} | PathID: {m_PathID} | Name: \"{m_Name}\"");
-            }
-            else
-            {
-                GetTriangles();
-            }
+                if (version >= (2, 6)) //2.6.0 and later
+                {
+                    DecompressCompressedMesh();
+                }
 
-            isLoaded = true;
-            if (isStreamedDataSize)
-                BigArrayPool<byte>.Shared.Return(m_VertexData.m_DataSize, clearArray: true);
+                if (m_IndexBuffer?.Length == 0)
+                {
+                    var msg = m_HasVirtualGeometryMesh
+                        ? "Unsupported mesh type: Virtual Geometry"
+                        : "Cannot process empty mesh";
+                    Logger.Warning($"{msg} | PathID: {m_PathID} | Name: \"{m_Name}\"");
+                }
+                else
+                {
+                    GetTriangles();
+                }
+
+                isLoaded = true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"Cannot process mesh | PathID: {m_PathID} | Name: \"{m_Name}\"" +
+                               $"\n{ex.Message}");
+                Logger.Debug(ex.StackTrace);
+            }
+            finally
+            {
+                if (isStreamedDataSize)
+                    BigArrayPool<byte>.Shared.Return(m_VertexData.m_DataSize, clearArray: true);
+            }
         }
 
         private void ReadVertexData()
@@ -1202,7 +1248,9 @@ namespace AssetStudio
             //IndexBuffer
             if (m_CompressedMesh.m_Triangles.m_NumItems > 0)
             {
-                m_IndexBuffer = Array.ConvertAll(m_CompressedMesh.m_Triangles.UnpackInts(), x => (uint)x);
+                m_IndexBuffer = !m_Use16BitIndices && m_CompressedMesh.m_Triangles.m_NumItems / 2 == m_SubMeshes.Sum(x=> x.indexCount)
+                    ? MemoryMarshal.Cast<byte, uint>(m_CompressedMesh.m_Triangles.m_Data).ToArray() // https://github.com/aelurum/AssetStudioMod/issues/147
+                    : Array.ConvertAll(m_CompressedMesh.m_Triangles.UnpackInts(), x => (uint)x);
             }
             //Color
             if (m_CompressedMesh.m_Colors?.m_NumItems > 0)
@@ -1461,7 +1509,6 @@ namespace AssetStudio
             }
         }
 
-
         public static uint GetFormatSize(VertexFormat format)
         {
             switch (format)
@@ -1491,8 +1538,13 @@ namespace AssetStudio
             return format >= VertexFormat.UInt8;
         }
 
-        public static float[] BytesToFloatArray(byte[] inputBytes, VertexFormat format)
+        public static float[] BytesToFloatArray(ReadOnlySpan<byte> inputBytes, VertexFormat format)
         {
+            if (format == VertexFormat.Float)
+            {
+                return MemoryMarshal.Cast<byte, float>(inputBytes).ToArray();
+            }
+
             var size = GetFormatSize(format);
             var len = inputBytes.Length / size;
             var result = new float[len];
@@ -1500,15 +1552,8 @@ namespace AssetStudio
             {
                 switch (format)
                 {
-                    case VertexFormat.Float:
-#if NET
-                        result[i] = BinaryPrimitives.ReadSingleLittleEndian(inputBytes.AsSpan(i * 4));
-#else
-                        result[i] = BitConverter.ToSingle(inputBytes, i * 4);
-#endif
-                        break;
                     case VertexFormat.Float16:
-                        result[i] = (float)HalfHelper.ToHalf(inputBytes, i * 2);
+                        result[i] = (float)inputBytes.ReadHalf(i * 2);
                         break;
                     case VertexFormat.UNorm8:
                         result[i] = inputBytes[i] / 255f;
@@ -1517,10 +1562,10 @@ namespace AssetStudio
                         result[i] = Math.Max((sbyte)inputBytes[i] / 127f, -1f);
                         break;
                     case VertexFormat.UNorm16:
-                        result[i] = BinaryPrimitives.ReadUInt16LittleEndian(inputBytes.AsSpan(i * 2)) / 65535f;
+                        result[i] = inputBytes.ReadUInt16(i * 2) / 65535f;
                         break;
                     case VertexFormat.SNorm16:
-                        result[i] = Math.Max(BinaryPrimitives.ReadInt16LittleEndian(inputBytes.AsSpan(i * 2)) / 32767f, -1f);
+                        result[i] = Math.Max(inputBytes.ReadInt16(i * 2) / 32767f, -1f);
                         break;
                 }
             }
@@ -1529,6 +1574,11 @@ namespace AssetStudio
 
         public static int[] BytesToIntArray(ReadOnlySpan<byte> inputBytes, VertexFormat format)
         {
+            if (format == VertexFormat.SInt32)
+            {
+                return MemoryMarshal.Cast<byte, int>(inputBytes).ToArray();
+            }
+
             var size = GetFormatSize(format);
             var len = inputBytes.Length / size;
             var result = new int[len];
@@ -1541,16 +1591,13 @@ namespace AssetStudio
                         result[i] = inputBytes[i];
                         break;
                     case VertexFormat.UInt16:
-                        result[i] = BinaryPrimitives.ReadUInt16LittleEndian(inputBytes.Slice(i * 2));
+                        result[i] = inputBytes.ReadUInt16(i * 2);
                         break;
                     case VertexFormat.SInt16:
-                        result[i] = BinaryPrimitives.ReadInt16LittleEndian(inputBytes.Slice(i * 2));
+                        result[i] = inputBytes.ReadInt16(i * 2);
                         break;
                     case VertexFormat.UInt32:
-                        result[i] = (int)BinaryPrimitives.ReadUInt32LittleEndian(inputBytes.Slice(i * 4));
-                        break;
-                    case VertexFormat.SInt32:
-                        result[i] = BinaryPrimitives.ReadInt32LittleEndian(inputBytes.Slice(i * 4));
+                        result[i] = (int)inputBytes.ReadUInt32(i * 4);
                         break;
                 }
             }

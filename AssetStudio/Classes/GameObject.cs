@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using AssetStudio.Addons.CubismLive2D;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace AssetStudio
@@ -30,13 +31,24 @@ namespace AssetStudio
                 m_Components.Add(new PPtr<Component>(reader));
             }
 
-            var m_Layer = reader.ReadInt32();
-            if (version.IsTuanjie && (version > (2022, 3, 2) || (version == (2022, 3, 2) && version.Build >= 11))) //2022.3.2t11(1.1.3) and up
+            if (version < (2, 1)) //2.1 down
+            {
+                var m_IsActive = reader.ReadByte();
+                var m_Layer = version < (1, 5) ? reader.ReadUInt16() : reader.ReadUInt32();
+                var m_Tag = reader.ReadUInt16();
+            }
+            else
+            {
+                var m_Layer = reader.ReadInt32();
+            }
+
+            if (version.IsTuanjie && version >= (2022, 3, 2, 11)) //2022.3.2t11(1.1.3) and up
             {
                 var m_HasEditorInfo = reader.ReadBoolean();
                 reader.AlignStream();
             }
-            m_Name = reader.ReadAlignedString();
+
+            m_Name = version >= (1, 5) ? reader.ReadAlignedString() : $"GameObject {reader.m_PathID}";
         }
     }
 }

@@ -1,3 +1,5 @@
+﻿using AssetStudio.Addons.CubismLive2D;
+using AssetStudio.CustomOptions.Asmo;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -5,25 +7,22 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
-using System.Text.Json.Serialization;
 using System.Text.Json;
-using AssetStudio.CustomOptions;
-using AssetStudio.CustomOptions.Asmo;
+using System.Text.Json.Serialization;
 using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
 {
     public class AssetsManager
     {
-        public bool LoadViaTypeTree = true;
-        public bool MeshLazyLoad = true;
-        public ImportOptions Options = new ImportOptions();
-        public readonly List<Action<OptionsFile>> OptionLoaders = new List<Action<OptionsFile>>();
+        public readonly AssetsManagerOptions Options = new AssetsManagerOptions();
         public readonly List<SerializedFile> AssetsFileList = new List<SerializedFile>();
 
-        internal Dictionary<string, int> assetsFileIndexCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        internal ConcurrentDictionary<string, BinaryReader> resourceFileReaders = new ConcurrentDictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);
+        internal UnityVersion AutoLegacyVersion = null;
+        internal Dictionary<string, int> AssetsFileIndexCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        internal ConcurrentDictionary<string, BinaryReader> ResourceFileReaders = new ConcurrentDictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);
 
+        private readonly List<Action<OptionsFile>> optionLoaders = new List<Action<OptionsFile>>();
         private readonly List<string> importFiles = new List<string>();
         private readonly HashSet<ClassIDType> filteredAssetTypesList = new HashSet<ClassIDType>();
         private readonly HashSet<string> importFilesHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -32,7 +31,17 @@ namespace AssetStudio
 
         public AssetsManager()
         {
-            OptionLoaders.Add(LoadImportOptions);
+            AddOptionsLoader(Options.LoadGameSpecificOptionsFromFile);
+        }
+
+        public void AddOptionsLoader(Action<OptionsFile> loader)
+        {
+            optionLoaders.Add(loader);
+        }
+
+        public void ClearOptionLoaders()
+        {
+            optionLoaders.Clear();
         }
 
         public void SetAssetFilter(params ClassIDType[] classIDTypes)
@@ -213,6 +222,8 @@ namespace AssetStudio
                     if (fromZip)
                         return true;
 
+                    DirectoryInfo dirInfo = null;
+                    FileInfo[] fileInfoArray = null;
                     foreach (var sharedFile in assetsFile.m_Externals)
                     {
                         var sharedFileName = sharedFile.fileName;
@@ -222,15 +233,20 @@ namespace AssetStudio
                             var sharedFilePath = Path.Combine(dirName, sharedFileName);
                             if (!noexistFiles.Contains(sharedFilePath))
                             {
-                                if (!File.Exists(sharedFilePath))
+                                var isFileExist = File.Exists(sharedFilePath);
+                                if (!isFileExist)
                                 {
-                                    var findFiles = Directory.GetFiles(dirName, sharedFileName, SearchOption.AllDirectories);
-                                    if (findFiles.Length > 0)
+                                    dirInfo = dirInfo ?? new DirectoryInfo(dirName);
+                                    fileInfoArray = fileInfoArray ?? dirInfo.GetFiles("*.*", SearchOption.AllDirectories);
+
+                                    var fileInfo = fileInfoArray.FirstOrDefault(x => x.Name == sharedFileName);
+                                    if (fileInfo != null)
                                     {
-                                        sharedFilePath = findFiles[0];
+                                        sharedFilePath = fileInfo.FullName;
+                                        isFileExist = true;
                                     }
                                 }
-                                if (File.Exists(sharedFilePath))
+                                if (isFileExist)
                                 {
                                     importFiles.Add(sharedFilePath);
                                     importFilesHash.Add(sharedFileName);
@@ -289,7 +305,7 @@ namespace AssetStudio
                 catch (Exception e)
                 {
                     Logger.Warning($"Failed to read assets file \"{reader.FullPath}\" from {Path.GetFileName(originalPath)}\n{e}");
-                    resourceFileReaders.TryAdd(reader.FileName, reader);
+                    ResourceFileReaders.TryAdd(reader.FileName, reader);
                 }
             }
             else
@@ -309,19 +325,18 @@ namespace AssetStudio
             
             try
             {
-                var bundleFile = new BundleFile(bundleReader, Options.BundleOptions);
+                var bundleFile = new BundleFile(bundleReader, Options);
                 isLoaded = LoadBundleFiles(bundleReader, bundleFile, originalPath);
                 if (!isLoaded)
                     return false;
 
                 while (bundleFile.IsDataAfterBundle && isLoaded)
                 {
-                    isLoaded = false;
                     bundleStream.Offset = reader.Position;
                     bundleReader = new FileReader($"{reader.FullPath}_0x{bundleStream.Offset:X}", bundleStream);
                     if (bundleReader.FileType != FileType.BundleFile)
                     {
-                        Logger.Debug("Unknown data was detected after the end of the bundle.");
+                        Logger.Warning("Unknown data was detected after the end of the bundle.");
                         break;
                     }
                     if (bundleReader.Position > 0)
@@ -331,7 +346,7 @@ namespace AssetStudio
                         bundleReader.FileName = $"{reader.FileName}_0x{bundleStream.Offset:X}";
                     }
                     Logger.Info($"[MultiBundle] Loading \"{reader.FileName}\" from offset: 0x{bundleStream.Offset:X}");
-                    bundleFile = new BundleFile(bundleReader, Options.BundleOptions, isMultiBundle: true);
+                    bundleFile = new BundleFile(bundleReader, Options, isMultiBundle: true);
                     isLoaded = LoadBundleFiles(bundleReader, bundleFile, originalPath ?? reader.FullPath);
                 }
                 return isLoaded;
@@ -360,7 +375,7 @@ namespace AssetStudio
 
         private bool LoadBundleFiles(FileReader reader, BundleFile bundleFile, string originalPath = null)
         {
-            foreach (var file in bundleFile.fileList)
+            foreach (var file in bundleFile.FileList)
             {
                 if (file.stream == null)
                     continue;
@@ -374,7 +389,7 @@ namespace AssetStudio
                 }
                 else
                 {
-                    resourceFileReaders.TryAdd(file.fileName, subReader);
+                    ResourceFileReaders.TryAdd(file.fileName, subReader);
                 }
             }
             return true;
@@ -386,7 +401,7 @@ namespace AssetStudio
             try
             {
                 var webFile = new WebFile(reader);
-                foreach (var file in webFile.fileList)
+                foreach (var file in webFile.FileList)
                 {
                     var dummyPath = Path.Combine(Path.GetDirectoryName(reader.FullPath), file.fileName);
                     var subReader = new FileReader(dummyPath, file.stream);
@@ -402,7 +417,7 @@ namespace AssetStudio
                             LoadWebFile(subReader);
                             break;
                         case FileType.ResourceFile:
-                            resourceFileReaders.TryAdd(file.fileName, subReader);
+                            ResourceFileReaders.TryAdd(file.fileName, subReader);
                             break;
                     }
                 }
@@ -503,7 +518,7 @@ namespace AssetStudio
                             if (entryReader.FileType == FileType.ResourceFile)
                             {
                                 entryReader.Position = 0;
-                                resourceFileReaders.TryAdd(entry.Name, entryReader);
+                                ResourceFileReaders.TryAdd(entry.Name, entryReader);
                             }
                             Progress.Report(++k, progressCount);
                         }
@@ -541,7 +556,7 @@ namespace AssetStudio
                 if (optionsFile == null)
                     continue;
 
-                foreach (var optionsLoader in OptionLoaders)
+                foreach (var optionsLoader in optionLoaders)
                 {
                     optionsLoader(optionsFile);
                 }
@@ -571,34 +586,18 @@ namespace AssetStudio
             }
         }
 
-        private void LoadImportOptions(OptionsFile optionsFile)
+        private void CheckStrippedVersion(SerializedFile assetsFile, UnityVersion bundleUnityVer = null)
         {
-            try
-            {
-                var importOptions = ImportOptions.FromOptionsFile(optionsFile);
-                if (importOptions == null)
-                    return;
-                Options = importOptions;
-                Logger.Info("Import options successfully loaded.");
-            }
-            catch (Exception e)
-            {
-                Logger.Warning($"Error while reading import options\n{e}");
-            }
-        }
-
-        public void CheckStrippedVersion(SerializedFile assetsFile, UnityVersion bundleUnityVer = null)
-        {
-            if (assetsFile.version.IsStripped && Options.CustomUnityVersion == null)
+            if (assetsFile.version.IsStripped && Options.GameSpecific.CustomUnityVersion == null)
             {
                 var msg = "The asset's Unity version has been stripped, please set the version in the options.";
                 if (bundleUnityVer != null && !bundleUnityVer.IsStripped)
                     msg += $"\n\nAssumed Unity version based on asset bundle: {bundleUnityVer}";
                 throw new NotSupportedException(msg);
             }
-            if (Options.CustomUnityVersion != null)
+            if (Options.GameSpecific.CustomUnityVersion != null)
             {
-                assetsFile.version = Options.CustomUnityVersion;
+                assetsFile.version = Options.GameSpecific.CustomUnityVersion;
             }
         }
 
@@ -611,17 +610,34 @@ namespace AssetStudio
             }
             AssetsFileList.Clear();
 
-            foreach (var resourceFileReader in resourceFileReaders)
+            foreach (var resourceFileReader in ResourceFileReaders)
             {
                 resourceFileReader.Value.Close();
             }
-            resourceFileReaders.Clear();
+            ResourceFileReaders.Clear();
 
-            assetsFileIndexCache.Clear();
+            AssetsFileIndexCache.Clear();
         }
 
         private void ReadAssets()
         {
+            var serializedVer = AssetsFileList[0].header.m_Version;
+            switch (serializedVer)
+            {
+                case SerializedFileFormatVersion.Unknown_5:
+                case SerializedFileFormatVersion.Unknown_6:
+                    if (AutoLegacyVersion == null && Options.GameSpecific.CustomUnityVersion == null)
+                    {
+                        var versions = serializedVer == SerializedFileFormatVersion.Unknown_6
+                            ? "'2.1.0f1', '2.5.0f1', '2.6.0f1'"
+                            : "'1.2.0f1', '1.6.0f1', '2.0.0f1'";
+                        Logger.Warning(
+                            "\nUnable to detect legacy Unity version automatically\n" +
+                            "If the assets load with errors try to specify one of the following Unity versions\n" +
+                            $"Possible versions: {versions}");
+                    }
+                    break;
+            }
             Logger.Info("Read assets...");
 
             var jsonOptions = new JsonSerializerOptions
@@ -637,6 +653,11 @@ namespace AssetStudio
             Progress.Reset();
             foreach (var assetsFile in AssetsFileList)
             {
+                if (AutoLegacyVersion != null && Options.GameSpecific.CustomUnityVersion == null)
+                {
+                    assetsFile.version = AutoLegacyVersion;
+                }
+
                 JsonConverterHelper.AssetsFile = assetsFile;
                 foreach (var objectInfo in assetsFile.m_Objects)
                 {
@@ -648,20 +669,21 @@ namespace AssetStudio
                     try
                     {
                         Object obj = null;
+                        var parseByTypeTree = objectReader.serializedType?.m_Type != null && Options.ParseByTypeTree;
                         switch (objectReader.type)
                         {
                             case ClassIDType.Animation:
                                 obj = new Animation(objectReader);
                                 break;
-                            case ClassIDType.AnimationClip:
-                                obj = objectReader.serializedType?.m_Type != null && LoadViaTypeTree
-                                    ? new AnimationClip(objectReader, TypeTreeHelper.ReadTypeByteArray(objectReader.serializedType.m_Type, objectReader), jsonOptions, objectInfo)
+                            case ClassIDType.AnimationClip when objectReader.version >= (1, 5):
+                                obj = parseByTypeTree
+                                    ? new AnimationClip(objectReader, jsonOptions, objectInfo)
                                     : new AnimationClip(objectReader);
                                 break;
                             case ClassIDType.Animator:
                                 obj = new Animator(objectReader);
                                 break;
-                            case ClassIDType.AnimatorController:
+                            case ClassIDType.AnimatorController when objectReader.version >= (1, 5):
                                 obj = new AnimatorController(objectReader);
                                 break;
                             case ClassIDType.AnimatorOverrideController:
@@ -669,6 +691,9 @@ namespace AssetStudio
                                 break;
                             case ClassIDType.AssetBundle:
                                 obj = new AssetBundle(objectReader);
+                                break;
+                            case ClassIDType.AssetBundleManifest:
+                                obj = new AssetBundleManifest(objectReader);
                                 break;
                             case ClassIDType.AudioClip:
                                 obj = new AudioClip(objectReader);
@@ -679,15 +704,15 @@ namespace AssetStudio
                             case ClassIDType.BuildSettings:
                                 obj = new BuildSettings(objectReader);
                                 break;
-                            case ClassIDType.Font:
+                            case ClassIDType.Font when objectReader.version >= 3:
                                 obj = new Font(objectReader);
                                 break;
                             case ClassIDType.GameObject:
                                 obj = new GameObject(objectReader);
                                 break;
                             case ClassIDType.Material:
-                                obj = objectReader.serializedType?.m_Type != null && LoadViaTypeTree
-                                    ? new Material(objectReader, TypeTreeHelper.ReadTypeByteArray(objectReader.serializedType.m_Type, objectReader), jsonOptions)
+                                obj = parseByTypeTree
+                                    ? new Material(objectReader, jsonOptions)
                                     : new Material(objectReader);
                                 break;
                             case ClassIDType.Mesh:
@@ -697,7 +722,9 @@ namespace AssetStudio
                                 obj = new MeshFilter(objectReader);
                                 break;
                             case ClassIDType.MeshRenderer:
-                                obj = new MeshRenderer(objectReader);
+                                obj = parseByTypeTree
+                                    ? new MeshRenderer(objectReader, jsonOptions)
+                                    : new MeshRenderer(objectReader);
                                 break;
                             case ClassIDType.MonoBehaviour:
                                 obj = new MonoBehaviour(objectReader);
@@ -705,24 +732,31 @@ namespace AssetStudio
                             case ClassIDType.MonoScript:
                                 obj = new MonoScript(objectReader);
                                 break;
-                            case ClassIDType.MovieTexture:
+                            case ClassIDType.MovieTexture when objectReader.version >= 2:
                                 obj = new MovieTexture(objectReader);
                                 break;
                             case ClassIDType.PlayerSettings:
                                 obj = new PlayerSettings(objectReader);
                                 break;
-                            case ClassIDType.PreloadData:
+                            case ClassIDType.BuildProfilePlayerSettings: //from 6000.7
+                                obj = new BuildProfilePlayerSettings(objectReader);
+                                break;
+                            case ClassIDType.PreloadData when objectReader.version >= (2, 5):
                                 obj = new PreloadData(objectReader);
                                 break;
                             case ClassIDType.RectTransform:
                                 obj = new RectTransform(objectReader);
                                 break;
-                            case ClassIDType.Shader:
-                                if (objectReader.version < 2021)
-                                    obj = new Shader(objectReader);
+                            case ClassIDType.Shader when objectReader.version < 2021:
+                                obj = new Shader(objectReader);
+                                break;
+                            case ClassIDType.SkinnedMeshRenderer when parseByTypeTree:
+                                obj = new SkinnedMeshRenderer(objectReader, jsonOptions);
                                 break;
                             case ClassIDType.SkinnedMeshRenderer:
-                                obj = new SkinnedMeshRenderer(objectReader);
+                                obj = objectReader.version < (2, 1)
+                                    ? new SkinnedMeshFilter(objectReader).ToSkinnedMeshRenderer()
+                                    : new SkinnedMeshRenderer(objectReader);
                                 break;
                             case ClassIDType.Sprite:
                                 obj = new Sprite(objectReader);
@@ -734,13 +768,13 @@ namespace AssetStudio
                                 obj = new TextAsset(objectReader);
                                 break;
                             case ClassIDType.Texture2D:
-                                obj = objectReader.serializedType?.m_Type != null && LoadViaTypeTree
-                                    ? new Texture2D(objectReader, TypeTreeHelper.ReadTypeByteArray(objectReader.serializedType.m_Type, objectReader), jsonOptions)
+                                obj = parseByTypeTree
+                                    ? new Texture2D(objectReader, jsonOptions)
                                     : new Texture2D(objectReader);
                                 break;
                             case ClassIDType.Texture2DArray:
-                                obj = objectReader.serializedType?.m_Type != null && LoadViaTypeTree
-                                    ? new Texture2DArray(objectReader, TypeTreeHelper.ReadTypeByteArray(objectReader.serializedType.m_Type, objectReader), jsonOptions)
+                                obj = parseByTypeTree
+                                    ? new Texture2DArray(objectReader, jsonOptions)
                                     : new Texture2DArray(objectReader);
                                 break;
                             case ClassIDType.Transform:
@@ -776,6 +810,8 @@ namespace AssetStudio
                     Progress.Report(++i, progressCount);
                 }
             }
+
+            AutoLegacyVersion = null;
         }
 
         private void ProcessAssets()
@@ -834,6 +870,32 @@ namespace AssetStudio
                                                         m_GameObject.CubismModel.FadeController = m_MonoBehaviour;
                                                     break;
                                                 case "CubismExpressionController":
+                                                    if (m_GameObject.CubismModel != null)
+                                                        m_GameObject.CubismModel.ExpressionController = m_MonoBehaviour;
+                                                    break;
+                                            }
+                                        }
+                                        else if (CubismHelpers.TryGetCubismMonoBehaviourType(m_MonoBehaviour, out var type))
+                                        {
+                                            switch (type)
+                                            {
+                                                case CubismHelpers.CubismMonoBehaviourType.ModelPPtr:
+                                                    if (m_GameObject.m_Transform == null)
+                                                        break;
+                                                    m_GameObject.CubismModel = new CubismModel(m_GameObject)
+                                                    {
+                                                        CubismModelMono = m_MonoBehaviour
+                                                    };
+                                                    break;
+                                                case CubismHelpers.CubismMonoBehaviourType.Physics:
+                                                    if (m_GameObject.CubismModel != null)
+                                                        m_GameObject.CubismModel.PhysicsController = m_MonoBehaviour;
+                                                    break;
+                                                case CubismHelpers.CubismMonoBehaviourType.FadeController:
+                                                    if (m_GameObject.CubismModel != null)
+                                                        m_GameObject.CubismModel.FadeController = m_MonoBehaviour;
+                                                    break;
+                                                case CubismHelpers.CubismMonoBehaviourType.ExpressionController:
                                                     if (m_GameObject.CubismModel != null)
                                                         m_GameObject.CubismModel.ExpressionController = m_MonoBehaviour;
                                                     break;

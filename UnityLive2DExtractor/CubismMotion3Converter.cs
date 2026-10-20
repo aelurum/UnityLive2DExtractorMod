@@ -171,7 +171,7 @@ namespace UnityLive2DExtractor
         {
             foreach (var id in ids)
             {
-                var name = pathType + id; ;
+                var name = pathType + id;
                 bonePathHash[GetCRC(name)] = name;
                 int index;
                 while ((index = name.IndexOf("/", StringComparison.Ordinal)) >= 0)

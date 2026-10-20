@@ -14,8 +14,29 @@ namespace AssetStudio
         public UnityTexEnv(ObjectReader reader)
         {
             m_Texture = new PPtr<Texture>(reader);
-            m_Scale = reader.ReadVector2();
-            m_Offset = reader.ReadVector2();
+            if (reader.version < (2, 1)) //2.1 down
+            {
+                if (reader.version < (1, 5)) //1.5 down
+                {
+                    m_Offset = reader.ReadVector3();
+                    m_Scale = reader.ReadVector3();
+                    var matRemap0 = reader.ReadInt32();
+                    var matRemap1 = reader.ReadInt32();
+                    var matRemap2 = reader.ReadInt32();
+                    var matRotate = reader.ReadSingle();
+                    var texGen = reader.ReadInt32();
+                }
+                else
+                {
+                    m_Scale = reader.ReadVector3();
+                    m_Offset = reader.ReadVector3();
+                }
+            }
+            else
+            {
+                m_Scale = reader.ReadVector2();
+                m_Offset = reader.ReadVector2();
+            }
         }
     }
 
@@ -68,14 +89,18 @@ namespace AssetStudio
     public sealed class Material : NamedObject
     {
         public PPtr<Shader> m_Shader;
+        public string[] m_ValidKeywords;
+        public string[] m_InvalidKeywords;
         public UnityPropertySheet m_SavedProperties;
 
         public Material() { }
 
-        public Material(ObjectReader reader, byte[] type, JsonSerializerOptions jsonOptions) : base(reader)
+        public Material(ObjectReader reader, JsonSerializerOptions jsonOptions) : base(reader)
         {
-            var parsedMaterial = JsonSerializer.Deserialize<Material>(type, jsonOptions);
+            var parsedMaterial = JsonSerializer.Deserialize<Material>(TypeTreeHelper.ReadTypeByteArray(reader), jsonOptions);
             m_Shader = parsedMaterial.m_Shader;
+            m_ValidKeywords = parsedMaterial.m_ValidKeywords;
+            m_InvalidKeywords = parsedMaterial.m_InvalidKeywords;
             m_SavedProperties = parsedMaterial.m_SavedProperties;
         }
 
@@ -90,8 +115,8 @@ namespace AssetStudio
 
             if (version >= (2021, 2, 18)) //2021.2.18 and up
             {
-                var m_ValidKeywords = reader.ReadStringArray();
-                var m_InvalidKeywords = reader.ReadStringArray();
+                m_ValidKeywords = reader.ReadStringArray();
+                m_InvalidKeywords = reader.ReadStringArray();
             }
             else if (version >= 5) //5.0 - 2021.2.17
             {

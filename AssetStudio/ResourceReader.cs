@@ -1,4 +1,5 @@
 ﻿using System.IO;
+using System.Text.Json.Serialization;
 
 namespace AssetStudio
 {
@@ -16,23 +17,41 @@ namespace AssetStudio
             set => size = value;
         }
         public long Offset { get; set; }
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public EndianType Endian { get; }
 
         public ResourceReader() { }
 
-        public ResourceReader(string path, SerializedFile assetsFile, long offset, long size)
+        public ResourceReader(string path, SerializedFile assetsFile, long offset, long size, ClassIDType type)
         {
             needSearch = true;
             this.path = path;
             this.assetsFile = assetsFile;
             this.Offset = offset;
             this.size = size;
+            this.Endian = assetsFile.reader.Endian;
+
+            if (assetsFile.version >= (6000, 6) && path.StartsWith("cah:/") && !Path.HasExtension(path)) //6000.6 and up
+            {
+                switch (type)
+                {
+                    case ClassIDType.AudioClip:
+                    case ClassIDType.VideoClip:
+                        this.path += ".resource";
+                        break;
+                    default:
+                        this.path += ".resS";
+                        break;
+                }
+            }
         }
 
-        public ResourceReader(BinaryReader reader, long offset, long size)
+        public ResourceReader(EndianBinaryReader reader, long offset, long size)
         {
             this.reader = reader;
             this.Offset = offset;
             this.size = size;
+            this.Endian = reader.Endian;
         }
 
         private BinaryReader GetReader()
@@ -40,7 +59,7 @@ namespace AssetStudio
             if (needSearch)
             {
                 var resourceFileName = Path.GetFileName(path);
-                if (assetsFile.assetsManager.resourceFileReaders.TryGetValue(resourceFileName, out reader))
+                if (assetsFile.assetsManager.ResourceFileReaders.TryGetValue(resourceFileName, out reader))
                 {
                     needSearch = false;
                     return reader;
@@ -58,12 +77,12 @@ namespace AssetStudio
                 if (File.Exists(resourceFilePath))
                 {
                     needSearch = false;
-                    if (assetsFile.assetsManager.resourceFileReaders.TryGetValue(resourceFileName, out reader))
+                    if (assetsFile.assetsManager.ResourceFileReaders.TryGetValue(resourceFileName, out reader))
                     {
                         return reader;
                     }
                     reader = new BinaryReader(File.OpenRead(resourceFilePath));
-                    assetsFile.assetsManager.resourceFileReaders.TryAdd(resourceFileName, reader);
+                    assetsFile.assetsManager.ResourceFileReaders.TryAdd(resourceFileName, reader);
                     return reader;
                 }
                 throw new FileNotFoundException($"Can't find the resource file {resourceFileName}");
@@ -77,7 +96,7 @@ namespace AssetStudio
         public byte[] GetData()
         {
             var binaryReader = GetReader();
-            lock (binaryReader)
+            lock (binaryReader.BaseStream)
             {
                 binaryReader.BaseStream.Position = Offset;
                 return binaryReader.ReadBytes((int)size);
@@ -88,7 +107,7 @@ namespace AssetStudio
         {
             int dataLen;
             var binaryReader = GetReader();
-            lock (binaryReader)
+            lock (binaryReader.BaseStream)
             {
                 binaryReader.BaseStream.Position = Offset;
                 dataLen = binaryReader.Read(buff, startIndex, (int)size);

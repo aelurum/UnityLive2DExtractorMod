@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,6 +10,7 @@ namespace AssetStudio
     public static class TypeTreeHelper
     {
         private static readonly JsonSerializerOptions JsonOptions;
+
         static TypeTreeHelper()
         {
             JsonOptions = new JsonSerializerOptions
@@ -41,13 +41,13 @@ namespace AssetStudio
             }
             if (readed != reader.byteSize)
             {
-                Logger.Info($"Failed to read type, read {readed} bytes but expected {reader.byteSize} bytes");
+                Logger.Info($"Failed to read type, read {reader.Position - reader.byteStart} bytes but expected {reader.byteSize} bytes");
             }
 
             return sb.ToString();
         }
 
-        private static void ReadStringValue(StringBuilder sb, List<TypeTreeNode> m_Nodes, BinaryReader reader, ref int i)
+        private static void ReadStringValue(StringBuilder sb, List<TypeTreeNode> m_Nodes, ObjectReader reader, ref int i)
         {
             var m_Node = m_Nodes[i];
             var level = m_Node.m_Level;
@@ -141,7 +141,7 @@ namespace AssetStudio
                         reader.BaseStream.Position += size;
                         i += 2;
                         sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level)), varTypeStr, varNameStr);
-                        sb.AppendFormat("{0}{1} {2} = {3}\r\n", (new string('\t', level)), "int", "size", size);
+                        sb.AppendFormat("{0}{1} {2} = {3}\r\n", (new string('\t', level + 1)), "int", "size", size);
                         break;
                     }
                 default:
@@ -151,12 +151,26 @@ namespace AssetStudio
                             if ((m_Nodes[i + 1].m_MetaFlag & 0x4000) != 0)
                                 align = true;
                             append = false;
+                            var arrayTypeStr = m_Nodes.Count > i + 3
+                                ? m_Nodes[i + 3].m_Type
+                                : "";
                             sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level)), varTypeStr, varNameStr);
                             sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level + 1)), "Array", "Array");
                             var size = reader.ReadInt32();
                             sb.AppendFormat("{0}{1} {2} = {3}\r\n", (new string('\t', level + 1)), "int", "size", size);
                             var vector = GetNodes(m_Nodes, i);
                             i += vector.Count - 1;
+                            if (varNameStr.ToLower() == "m_fontdata" && arrayTypeStr == "char")
+                            {
+                                vector[vector.Count - 1].m_Type = arrayTypeStr = "UInt8";
+                            }
+
+                            if (size > 8192 && arrayTypeStr == "UInt8")
+                            {
+                                var data = Convert.ToBase64String(reader.ReadBytes(size));
+                                sb.AppendFormat("{0}{1} {2} = \"{3}\"\r\n", (new string('\t', level + 1)), "byte[]", "data", data);
+                                break;
+                            }
                             for (int j = 0; j < size; j++)
                             {
                                 sb.AppendFormat("{0}[{1}]\r\n", (new string('\t', level + 2)), j);
@@ -187,9 +201,9 @@ namespace AssetStudio
                 reader.AlignStream();
         }
 
-        public static byte[] ReadTypeByteArray(TypeTree m_Types, ObjectReader reader)
+        public static byte[] ReadTypeByteArray(ObjectReader reader)
         {
-            var type = ReadType(m_Types, reader);
+            var type = ReadType(reader.serializedType.m_Type, reader);
             var bytes = JsonSerializer.SerializeToUtf8Bytes(type, JsonOptions);
             type.Clear();
             return bytes;
@@ -222,7 +236,7 @@ namespace AssetStudio
             return obj;
         }
 
-        private static object ReadValue(List<TypeTreeNode> m_Nodes, BinaryReader reader, ref int i)
+        private static object ReadValue(List<TypeTreeNode> m_Nodes, ObjectReader reader, ref int i)
         {
             var m_Node = m_Nodes[i];
             var varTypeStr = m_Node.m_Type;
@@ -321,17 +335,44 @@ namespace AssetStudio
                         {
                             if ((m_Nodes[i + 1].m_MetaFlag & 0x4000) != 0)
                                 align = true;
+                            var arrayTypeStr = m_Nodes.Count > i + 3
+                                ? m_Nodes[i + 3].m_Type
+                                : "";
+                            var nodeName = m_Nodes[i].m_Name.ToLower();
                             var vector = GetNodes(m_Nodes, i);
                             i += vector.Count - 1;
-                            var size = reader.ReadInt32();
-                            var array = new object[size];
-                            for (int j = 0; j < size; j++)
+                            switch (arrayTypeStr)
                             {
-                                int tmp = 3;
-                                array[j] = ReadValue(vector, reader, ref tmp);
+                                case "UInt8":
+                                case "char" when nodeName == "m_fontdata":
+                                    value = reader.ReadUInt8Array();
+                                    break;
+                                case "UInt16":
+                                case "unsigned short":
+                                    value = reader.ReadUInt16Array();
+                                    break;
+                                case "UInt32":
+                                case "unsigned int":
+                                    value = reader.ReadUInt32Array();
+                                    break;
+                                case "int":
+                                case "SInt32":
+                                    value = reader.ReadInt32Array();
+                                    break;
+                                case "float":
+                                    value = reader.ReadSingleArray();
+                                    break;
+                                default:
+                                    var size = reader.ReadInt32();
+                                    var array = new object[size];
+                                    for (int j = 0; j < size; j++)
+                                    {
+                                        int tmp = 3;
+                                        array[j] = ReadValue(vector, reader, ref tmp);
+                                    }
+                                    value = array;
+                                    break;
                             }
-                            value = array;
-                            break;
                         }
                         else //Class
                         {
@@ -345,8 +386,8 @@ namespace AssetStudio
                                 obj[name] = ReadValue(@class, reader, ref j);
                             }
                             value = obj;
-                            break;
                         }
+                        break;
                     }
             }
             if (align)
