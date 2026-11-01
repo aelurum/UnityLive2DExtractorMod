@@ -1,4 +1,4 @@
-# UnityLive2DExtractor
+﻿# UnityLive2DExtractor
 
 [![Release](https://img.shields.io/github/v/release/aelurum/UnityLive2DExtractor?color=blue)](https://github.com/aelurum/UnityLive2DExtractor/releases/latest) [![Downloads](https://img.shields.io/github/downloads/aelurum/UnityLive2DExtractor/total?color=blue)](https://github.com/aelurum/UnityLive2DExtractor/releases/latest) [![Download latest release](https://img.shields.io/badge/Download_latest_release-blue)](https://github.com/aelurum/UnityLive2DExtractor/releases/latest)
 
@@ -29,8 +29,8 @@ Using the Live2D export option in AssetStudioMod makes possible such features as
 - specifying a default motion export mode
 - specifying a grouping option
 - using an alternative container-independent method of searching for model-related assets
-- enabling calculation of Linear motion segments as Bezier segments (may help if the exported motions look jerky/not smooth enough)
-- model extraction with selected motions (GUI only)
+- enabling "smooth motions" *(calculation of Linear motion segments as Bezier segments, which may help if the exported motions look jerky/not smooth enough)*
+- model extraction with manually selected motions *(GUI only)*
 
 ## Usage
 拖放Live2D文件夹到exe上，多个Live2D文件请放到一个文件夹内，将在文件夹所在目录生成`Live2DOutput`目录
@@ -48,4 +48,7 @@ dotnet UnityLive2DExtractor.dll <live2dfolder>
 ```
 
 ## Requirements
-- [.NET Framework 4.7.2](https://dotnet.microsoft.com/download/dotnet-framework/net472) / [.NET Runtime 8](https://dotnet.microsoft.com/download/dotnet/8.0) / [.NET Runtime 9](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [.NET Framework 4.7.2](https://dotnet.microsoft.com/download/dotnet-framework/net472) / [.NET Runtime 9](https://dotnet.microsoft.com/download/dotnet/9.0) / [.NET Runtime 10](https://dotnet.microsoft.com/download/dotnet/10.0)
+
+## Build
+- Visual Studio 2026 or newer
