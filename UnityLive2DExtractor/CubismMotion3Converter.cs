@@ -73,7 +73,7 @@ namespace UnityLive2DExtractor
                     iAnim.Events.Add(new ImportedEvent
                     {
                         time = m_Event.time,
-                        value = m_Event.data
+                        value = m_Event.functionName
                     });
                 }
 
